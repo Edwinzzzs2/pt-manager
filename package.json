@@ -1,0 +1,33 @@
+{
+  "name": "pt-manager",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build && electron-builder",
+    "preview": "vite preview",
+    "pack:win": "vue-tsc && vite build && electron-packager . pt-manager --platform=win32 --arch=x64 --out=out --overwrite"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "element-plus": "^2.11.9",
+    "node-cron": "^3.0.2",
+    "vue": "^3.4.21",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@types/node-cron": "^3.0.11",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "electron": "^30.0.1",
+    "electron-builder": "^24.13.3",
+    "electron-packager": "^17.1.1",
+    "sass": "^1.94.2",
+    "typescript": "^5.2.2",
+    "vite": "^5.1.6",
+    "vite-plugin-electron": "^0.28.6",
+    "vite-plugin-electron-renderer": "^0.14.5",
+    "vue-tsc": "^2.0.26"
+  },
+  "main": "dist-electron/main.js"
+}
