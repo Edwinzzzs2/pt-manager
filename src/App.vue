@@ -1,7 +1,7 @@
 <template>
-  <div class="app-container">
+  <div class="app-container animate-fade-in">
     <el-container>
-      <el-aside width="200px">
+      <el-aside>
         <el-menu
           router
           :default-active="$route.path"
@@ -9,15 +9,15 @@
         >
           <el-menu-item index="/">
             <el-icon><Monitor /></el-icon>
-            <span>Sites</span>
+            <span>站点</span>
           </el-menu-item>
           <el-menu-item index="/settings">
             <el-icon><Setting /></el-icon>
-            <span>Settings</span>
+            <span>设置</span>
           </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
-            <span>Logs</span>
+            <span>日志</span>
           </el-menu-item>
         </el-menu>
       </el-aside>
@@ -33,18 +33,9 @@ import { Monitor, Setting, Document } from '@element-plus/icons-vue'
 </script>
 
 <style>
-html, body, #app, .app-container, .el-container {
-  height: 100%;
-  margin: 0;
-}
+html, body, #app, .app-container, .el-container { height: 100%; margin: 0; }
 
-.el-aside {
-  background-color: #f5f7fa;
-  border-right: 1px solid #e6e6e6;
-}
+.el-aside { background-color: #f5f7fa; border-right: 1px solid #e6e6e6; }
 
-.el-menu {
-  border-right: none;
-  background-color: transparent;
-}
+.el-menu { border-right: none; background-color: transparent; }
 </style>

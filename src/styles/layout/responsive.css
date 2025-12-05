@@ -1,0 +1,34 @@
+/* App layout responsive adjustments */
+.app-container .el-container { min-height: 100vh; }
+
+.app-container .el-aside {
+  width: 12.5rem; /* 200px */
+  background-color: var(--gray-100);
+  border-right: 1px solid var(--gray-300);
+  transition: width 0.3s ease;
+}
+
+@media (max-width: 991.98px) {
+  .app-container .el-aside { width: 4rem; }
+  .app-container .el-menu .el-menu-item span { display: none; }
+}
+
+@media (max-width: 767.98px) {
+  .app-container .el-container { flex-direction: column; }
+  .app-container .el-aside {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--gray-300);
+  }
+}
+
+.app-container .el-main { padding: var(--space-4) var(--space-6); }
+
+@media (max-width: 767.98px) { .app-container .el-main { padding: var(--space-4) var(--space-4); } }
+
+/* Utility containers */
+.container { width: 100%; padding-left: 1rem; padding-right: 1rem; margin-left: auto; margin-right: auto; }
+@media (min-width: 576px) { .container { max-width: 540px; } }
+@media (min-width: 768px) { .container { max-width: 720px; } }
+@media (min-width: 992px) { .container { max-width: 960px; } }
+@media (min-width: 1200px) { .container { max-width: 1140px; } }

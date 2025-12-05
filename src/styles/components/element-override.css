@@ -1,0 +1,9 @@
+/* Light overrides to Element Plus to meet touch standards and theme */
+.el-button { min-height: 44px; }
+.el-button--primary { background-color: var(--primary-color); border-color: var(--primary-color); }
+.el-button--primary:hover { background-color: var(--primary-hover); border-color: var(--primary-hover); }
+.el-button--primary:active { background-color: var(--primary-active); border-color: var(--primary-active); }
+
+.el-table { background-color: #fff; }
+.table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+

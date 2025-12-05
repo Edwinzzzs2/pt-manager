@@ -1,8 +1,8 @@
 <template>
   <div class="logs-container">
     <div class="header">
-        <h2>Logs</h2>
-        <el-button @click="refreshLogs">Refresh</el-button>
+        <h2>日志</h2>
+        <el-button @click="refreshLogs">刷新</el-button>
     </div>
     <div class="log-content">
         <div v-for="(log, index) in logs" :key="index" class="log-line">
@@ -37,7 +37,8 @@ onMounted(() => {
     background: #f5f7fa;
     padding: 10px;
     border-radius: 4px;
-    height: 400px;
+    height: '90%';
+    min-height: 400px;
     overflow-y: auto;
     font-family: monospace;
 }

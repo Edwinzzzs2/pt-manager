@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { initScheduler, startScheduler, runTask } from './scheduler'
+import { initScheduler, startScheduler, runTask, openSite } from './scheduler'
 import { getStore, saveStore } from './store'
 import { getLogs } from './logger'
 
@@ -116,8 +116,8 @@ app.whenReady().then(() => {
     return true
   })
 
-  ipcMain.handle('open-external', (_event, url) => {
-    shell.openExternal(url)
+  ipcMain.handle('open-external', async (_event, url) => {
+    await openSite(url)
   })
 
   createWindow()

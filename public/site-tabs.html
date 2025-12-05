@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>PT Tabs</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    #tabs { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px; background: #f5f7fa; border-bottom: 1px solid #e6e6e6; }
+    .tab { padding: 6px 10px; border-radius: 8px; cursor: pointer; user-select: none; color: #333; }
+    .tab:hover { background: #eef2f7; }
+    .tab.active { background: #e9ecef; font-weight: 600; }
+    webview { position: fixed; top: 44px; left: 0; right: 0; bottom: 0; visibility: hidden; z-index: -1; }
+    webview.active { visibility: visible; z-index: 1; }
+  </style>
+</head>
+<body>
+  <div id="tabs"></div>
+  <script>
+    const params = new URLSearchParams(location.search)
+    let urls = []
+    try { urls = JSON.parse(decodeURIComponent(params.get('urls') || '[]')) } catch {}
+
+    const tabs = document.getElementById('tabs')
+    const views = []
+
+    function hostname(u) { try { return new URL(u).hostname } catch { return u } }
+
+    urls.forEach((url, i) => {
+      const t = document.createElement('div')
+      t.className = 'tab'
+      t.textContent = hostname(url)
+      t.title = url
+      t.onclick = () => activate(i)
+      tabs.appendChild(t)
+
+      const v = document.createElement('webview')
+      v.setAttribute('src', url)
+      v.setAttribute('disableblinkfeatures', 'OverlayScrollbars')
+      v.setAttribute('allowpopups', '')
+      v.addEventListener('dom-ready', () => {
+        try {
+          v.insertCSS(`
+            ::-webkit-scrollbar { width: 14px; height: 14px; }
+            ::-webkit-scrollbar-thumb { background: #b0b0b0; border-radius: 8px; }
+            ::-webkit-scrollbar-track { background: #eee; }
+            html, body { min-height: 100vh; }
+          `)
+        } catch {}
+      })
+      document.body.appendChild(v)
+      views.push({ tab: t, view: v })
+    })
+
+    function activate(i) {
+      views.forEach((pair, idx) => {
+        pair.tab.classList.toggle('active', idx === i)
+        pair.view.classList.toggle('active', idx === i)
+      })
+      
+    }
+
+    if (views.length) activate(0)
+  </script>
+</body>
+</html>
