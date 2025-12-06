@@ -13,7 +13,9 @@ dist-ssr
 *.local
 .trae/
 out/
+out2/
 dist-electron/
+release/
 
 # Editor directories and files
 .vscode/*

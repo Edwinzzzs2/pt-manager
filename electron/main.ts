@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, session, nativeImage } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import fs from 'node:fs'
 import { initScheduler, startScheduler, runTask, openSite } from './scheduler'
 import { getStore, saveStore } from './store'
 import { getLogs } from './logger'
@@ -31,9 +32,25 @@ import { initTray } from './tray'
 
 // ... existing imports ...
 
+// Single instance: if a second instance starts, close the existing one so the new takes over
+const gotLock = app.requestSingleInstanceLock()
+if (gotLock) {
+  app.on('second-instance', () => {
+    try { session.defaultSession.flushStorageData() } catch {}
+    try { session.fromPartition('persist:pt-tabs').flushStorageData() } catch {}
+    app.quit()
+  })
+}
+
 function createWindow() {
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    icon: (function(){
+      const png = path.join(process.env.VITE_PUBLIC, 'icon.png')
+      const svg = path.join(process.env.VITE_PUBLIC, 'electron-vite.svg')
+      let img = fs.existsSync(png) ? nativeImage.createFromPath(png) : nativeImage.createFromPath(svg)
+      if (img.isEmpty()) img = nativeImage.createFromPath(process.execPath)
+      return img
+    })(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
     },
@@ -65,6 +82,8 @@ function createWindow() {
 
 app.on('before-quit', () => {
   (app as any).isQuiting = true
+  try { session.defaultSession.flushStorageData() } catch {}
+  try { session.fromPartition('persist:pt-tabs').flushStorageData() } catch {}
 })
 
 app.on('window-all-closed', () => {

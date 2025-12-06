@@ -25,17 +25,26 @@
     const views = []
 
     function hostname(u) { try { return new URL(u).hostname } catch { return u } }
+    function normalize(u) {
+      try {
+        const n = new URL(u)
+        // if (n.hostname.endsWith('m-team.cc')) n.hostname = 'next.m-team.cc'
+        return n.toString()
+      } catch { return u }
+    }
 
     urls.forEach((url, i) => {
+      const normalized = normalize(url)
       const t = document.createElement('div')
       t.className = 'tab'
-      t.textContent = hostname(url)
-      t.title = url
+      t.textContent = hostname(normalized)
+      t.title = normalized
       t.onclick = () => activate(i)
       tabs.appendChild(t)
 
       const v = document.createElement('webview')
-      v.setAttribute('src', url)
+      v.setAttribute('partition', 'persist:pt-tabs')
+      v.setAttribute('src', normalized)
       v.setAttribute('disableblinkfeatures', 'OverlayScrollbars')
       v.setAttribute('allowpopups', '')
       v.addEventListener('dom-ready', () => {

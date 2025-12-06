@@ -1,10 +1,11 @@
-import { app as i, BrowserWindow as g, shell as j, nativeImage as O, Tray as k, Menu as x, ipcMain as h } from "electron";
-import { fileURLToPath as I } from "node:url";
-import s from "node:path";
-import S from "path";
-import a from "fs";
+import { app as r, BrowserWindow as P, shell as k, nativeImage as d, Tray as C, Menu as O, session as y, ipcMain as p } from "electron";
+import { fileURLToPath as _ } from "node:url";
+import i from "node:path";
+import U from "node:fs";
+import g from "path";
+import c from "fs";
 import { createRequire as $ } from "node:module";
-const f = S.join(i.getPath("userData"), "store.json"), w = {
+const m = g.join(r.getPath("userData"), "store.json"), v = {
   cron: "0 9 * * *",
   autoLaunch: !1,
   sites: [
@@ -20,114 +21,114 @@ const f = S.join(i.getPath("userData"), "store.json"), w = {
     }
   ]
 };
-function d() {
-  if (!a.existsSync(f)) {
-    const e = S.dirname(f);
-    return a.existsSync(e) || a.mkdirSync(e, { recursive: !0 }), a.writeFileSync(f, JSON.stringify(w, null, 2)), w;
+function f() {
+  if (!c.existsSync(m)) {
+    const e = g.dirname(m);
+    return c.existsSync(e) || c.mkdirSync(e, { recursive: !0 }), c.writeFileSync(m, JSON.stringify(v, null, 2)), v;
   }
   try {
-    return JSON.parse(a.readFileSync(f, "utf-8"));
+    return JSON.parse(c.readFileSync(m, "utf-8"));
   } catch {
-    return w;
+    return v;
   }
 }
-function C(e) {
-  a.writeFileSync(f, JSON.stringify(e, null, 2));
+function V(e) {
+  c.writeFileSync(m, JSON.stringify(e, null, 2));
 }
-const P = S.join(i.getPath("userData"), "app.log");
-function l(e) {
-  const o = `[${(/* @__PURE__ */ new Date()).toLocaleString()}] ${e}
+const I = g.join(r.getPath("userData"), "app.log");
+function u(e) {
+  const n = `[${(/* @__PURE__ */ new Date()).toLocaleString()}] ${e}
 `;
   try {
-    a.appendFileSync(P, o), console.log(o.trim());
-  } catch (p) {
-    console.error("Failed to write log", p);
+    c.appendFileSync(I, n), console.log(n.trim());
+  } catch (l) {
+    console.error("Failed to write log", l);
   }
 }
 function M() {
-  if (!a.existsSync(P)) return [];
+  if (!c.existsSync(I)) return [];
   try {
-    return a.readFileSync(P, "utf-8").split(`
+    return c.readFileSync(I, "utf-8").split(`
 `).filter((t) => t).reverse().slice(0, 100);
   } catch {
     return [];
   }
 }
-let m = null, c = null, y = !0, n = null;
-const U = s.dirname(I(import.meta.url));
-function A() {
-  const e = d();
-  v(e.cron);
+let S = null, a = null, w = !0, o = null;
+const A = i.dirname(_(import.meta.url));
+function B() {
+  const e = f();
+  L(e.cron);
 }
-async function F() {
-  if (m) return;
+async function q() {
+  if (S) return;
   try {
-    m = $(import.meta.url)("node-cron");
+    S = $(import.meta.url)("node-cron");
     return;
   } catch {
   }
   const e = await import("node-cron");
-  m = e.default ?? e;
+  S = e.default ?? e;
 }
-async function v(e) {
-  c && c.stop(), l(`Starting scheduler with cron: ${e}`);
+async function L(e) {
+  a && a.stop(), u(`Starting scheduler with cron: ${e}`);
   try {
-    await F(), c = m.schedule(e, () => {
-      y && b();
+    await q(), a = S.schedule(e, () => {
+      w && b();
     });
   } catch (t) {
-    l(`Error starting scheduler: ${t}`);
+    u(`Error starting scheduler: ${t}`);
   }
 }
 async function b() {
-  const t = d().sites.map((o) => o.url).filter(Boolean);
-  l(`Running task with ${t.length} site(s)`);
+  const t = f().sites.map((n) => n.url).filter(Boolean);
+  u(`Running task with ${t.length} site(s)`);
   try {
-    await H(t);
-  } catch (o) {
-    l(`Open sites failed: ${o}`);
+    await W(t);
+  } catch (n) {
+    u(`Open sites failed: ${n}`);
   }
-}
-function V() {
-  if (c) {
-    y = !1;
-    try {
-      c.stop(), l("Scheduler stopped");
-    } catch (e) {
-      l(`Stop scheduler failed: ${e}`);
-    }
-  }
-}
-async function B() {
-  y = !0;
-  try {
-    if (c)
-      c.start();
-    else {
-      const e = d();
-      await v(e.cron);
-    }
-    l("Scheduler started");
-  } catch (e) {
-    l(`Start scheduler failed: ${e}`);
-  }
-}
-function L() {
-  if (!c) return !1;
-  const e = c.getStatus ? c.getStatus() : void 0;
-  return e ? e === "running" : y;
 }
 function N() {
-  L() ? V() : B();
+  if (a) {
+    w = !1;
+    try {
+      a.stop(), u("Scheduler stopped");
+    } catch (e) {
+      u(`Stop scheduler failed: ${e}`);
+    }
+  }
 }
-async function q(e) {
+async function H() {
+  w = !0;
   try {
-    if (n && !n.isDestroyed())
+    if (a)
+      a.start();
+    else {
+      const e = f();
+      await L(e.cron);
+    }
+    u("Scheduler started");
+  } catch (e) {
+    u(`Start scheduler failed: ${e}`);
+  }
+}
+function R() {
+  if (!a) return !1;
+  const e = a.getStatus ? a.getStatus() : void 0;
+  return e ? e === "running" : w;
+}
+function J() {
+  R() ? N() : H();
+}
+async function Q(e) {
+  try {
+    if (o && !o.isDestroyed())
       try {
-        n.destroy();
+        o.destroy();
       } catch {
       }
-    n = new g({
+    o = new P({
       width: 1200,
       height: 800,
       autoHideMenuBar: !0,
@@ -135,23 +136,23 @@ async function q(e) {
         nodeIntegration: !1,
         contextIsolation: !0
       }
-    }), await n.loadURL(e), n.on("closed", () => {
-      n = null;
+    }), await o.loadURL(e), o.on("closed", () => {
+      o = null;
     });
   } catch {
     try {
-      await j.openExternal(e);
+      await k.openExternal(e);
     } catch {
     }
   }
 }
-async function H(e) {
-  if (n && !n.isDestroyed())
+async function W(e) {
+  if (o && !o.isDestroyed())
     try {
-      n.destroy();
+      o.destroy();
     } catch {
     }
-  n = new g({
+  o = new P({
     width: 1280,
     height: 800,
     center: !0,
@@ -160,86 +161,111 @@ async function H(e) {
       nodeIntegration: !1,
       contextIsolation: !0,
       webviewTag: !0,
-      preload: s.join(U, "preload.mjs")
+      preload: i.join(A, "preload.mjs")
     }
   });
-  const t = s.join(process.env.VITE_PUBLIC, "site-tabs.html");
-  await n.loadFile(t, { search: `?urls=${encodeURIComponent(JSON.stringify(e))}` });
-  const o = setTimeout(() => {
+  const t = i.join(process.env.VITE_PUBLIC, "site-tabs.html");
+  await o.loadFile(t, { search: `?urls=${encodeURIComponent(JSON.stringify(e))}` });
+  const n = setTimeout(() => {
     try {
-      n == null || n.close();
+      o == null || o.close();
     } catch {
     }
   }, 5 * 60 * 1e3);
-  n.on("closed", () => {
-    n = null, clearTimeout(o);
+  o.on("closed", () => {
+    o = null, clearTimeout(n);
   });
 }
-let u = null;
-function J(e) {
-  const t = S.join(process.env.VITE_PUBLIC, "electron-vite.svg"), o = O.createFromPath(t);
-  u = new k(o);
-  const p = () => x.buildFromTemplate([
+let h = null;
+function z(e) {
+  const t = g.join(process.env.VITE_PUBLIC, "icon.png"), n = g.join(process.env.VITE_PUBLIC, "electron-vite.svg");
+  let l;
+  c.existsSync(t) ? l = d.createFromPath(t) : l = d.createFromPath(n), l.isEmpty() && (l = d.createFromPath(process.execPath)), l.isEmpty() && (l = d.createEmpty().resize({ width: 16, height: 16 })), h = new C(l);
+  const E = () => O.buildFromTemplate([
     { label: "Show App", click: () => e.show() },
     { label: "Run Task Now", click: () => b() },
     {
-      label: L() ? "Disable Scheduler" : "Enable Scheduler",
+      label: R() ? "Disable Scheduler" : "Enable Scheduler",
       click: () => {
-        N(), u == null || u.setContextMenu(p());
+        J(), h == null || h.setContextMenu(E());
       }
     },
     { type: "separator" },
-    { label: "Exit", click: () => i.quit() }
-  ]), D = p();
-  u.setToolTip("PT Manager"), u.setContextMenu(D), u.on("double-click", () => {
+    { label: "Exit", click: () => r.quit() }
+  ]), F = E();
+  h.setToolTip("PT Manager"), h.setContextMenu(F), h.on("double-click", () => {
     e.show();
   });
 }
-const R = s.dirname(I(import.meta.url));
-process.env.APP_ROOT = s.join(R, "..");
-const T = process.env.VITE_DEV_SERVER_URL, Y = s.join(process.env.APP_ROOT, "dist-electron"), _ = s.join(process.env.APP_ROOT, "dist");
-process.env.VITE_PUBLIC = T ? s.join(process.env.APP_ROOT, "public") : _;
-let r;
-function E() {
-  r = new g({
-    icon: s.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
-    webPreferences: {
-      preload: s.join(R, "preload.mjs")
-    }
-  }), r.webContents.on("did-finish-load", () => {
-    r == null || r.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
-  }), T ? r.loadURL(T) : r.loadFile(s.join(_, "index.html")), J(r), r.on("close", (e) => (i.isQuiting || (e.preventDefault(), r == null || r.hide()), !1));
-}
-i.on("before-quit", () => {
-  i.isQuiting = !0;
-});
-i.on("window-all-closed", () => {
-  process.platform;
-});
-i.on("activate", () => {
-  g.getAllWindows().length === 0 && E();
-});
-i.whenReady().then(() => {
-  console.log("App User Data Path:", i.getPath("userData")), A();
+const D = i.dirname(_(import.meta.url));
+process.env.APP_ROOT = i.join(D, "..");
+const T = process.env.VITE_DEV_SERVER_URL, oe = i.join(process.env.APP_ROOT, "dist-electron"), j = i.join(process.env.APP_ROOT, "dist");
+process.env.VITE_PUBLIC = T ? i.join(process.env.APP_ROOT, "public") : j;
+let s;
+const G = r.requestSingleInstanceLock();
+G && r.on("second-instance", () => {
   try {
-    const e = d();
-    i.setLoginItemSettings({ openAtLogin: !!e.autoLaunch });
+    y.defaultSession.flushStorageData();
   } catch {
   }
-  h.handle("get-store", () => d()), h.handle("save-store", (e, t) => {
-    const o = d();
-    if (C(t), o.cron !== t.cron && v(t.cron), o.autoLaunch !== t.autoLaunch)
+  try {
+    y.fromPartition("persist:pt-tabs").flushStorageData();
+  } catch {
+  }
+  r.quit();
+});
+function x() {
+  s = new P({
+    icon: function() {
+      const e = i.join(process.env.VITE_PUBLIC, "icon.png"), t = i.join(process.env.VITE_PUBLIC, "electron-vite.svg");
+      let n = U.existsSync(e) ? d.createFromPath(e) : d.createFromPath(t);
+      return n.isEmpty() && (n = d.createFromPath(process.execPath)), n;
+    }(),
+    webPreferences: {
+      preload: i.join(D, "preload.mjs")
+    }
+  }), s.webContents.on("did-finish-load", () => {
+    s == null || s.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  }), T ? s.loadURL(T) : s.loadFile(i.join(j, "index.html")), z(s), s.on("close", (e) => (r.isQuiting || (e.preventDefault(), s == null || s.hide()), !1));
+}
+r.on("before-quit", () => {
+  r.isQuiting = !0;
+  try {
+    y.defaultSession.flushStorageData();
+  } catch {
+  }
+  try {
+    y.fromPartition("persist:pt-tabs").flushStorageData();
+  } catch {
+  }
+});
+r.on("window-all-closed", () => {
+  process.platform;
+});
+r.on("activate", () => {
+  P.getAllWindows().length === 0 && x();
+});
+r.whenReady().then(() => {
+  console.log("App User Data Path:", r.getPath("userData")), B();
+  try {
+    const e = f();
+    r.setLoginItemSettings({ openAtLogin: !!e.autoLaunch });
+  } catch {
+  }
+  p.handle("get-store", () => f()), p.handle("save-store", (e, t) => {
+    const n = f();
+    if (V(t), n.cron !== t.cron && L(t.cron), n.autoLaunch !== t.autoLaunch)
       try {
-        i.setLoginItemSettings({ openAtLogin: !!t.autoLaunch });
+        r.setLoginItemSettings({ openAtLogin: !!t.autoLaunch });
       } catch {
       }
     return !0;
-  }), h.handle("get-logs", () => M()), h.handle("run-task", () => (b(), !0)), h.handle("open-external", async (e, t) => {
-    await q(t);
-  }), E();
+  }), p.handle("get-logs", () => M()), p.handle("run-task", () => (b(), !0)), p.handle("open-external", async (e, t) => {
+    await Q(t);
+  }), x();
 });
 export {
-  Y as MAIN_DIST,
-  _ as RENDERER_DIST,
+  oe as MAIN_DIST,
+  j as RENDERER_DIST,
   T as VITE_DEV_SERVER_URL
 };
