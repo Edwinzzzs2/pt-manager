@@ -113,6 +113,7 @@ export async function openSite(url: string) {
                 contextIsolation: true
             }
         })
+        siteWindow.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36')
         await siteWindow.loadURL(url)
         siteWindow.on('closed', () => { siteWindow = null })
     } catch (e) {
@@ -137,6 +138,7 @@ export async function openSites(urls: string[]) {
             preload: path.join(__dirname, 'preload.mjs')
         }
     })
+    siteWindow.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36')
     const tabsHtml = path.join(process.env.VITE_PUBLIC as string, 'site-tabs.html')
     await siteWindow.loadFile(tabsHtml, { search: `?urls=${encodeURIComponent(JSON.stringify(urls))}` })
     const timeout = setTimeout(() => { try { siteWindow?.close() } catch {} }, 5 * 60 * 1000)
