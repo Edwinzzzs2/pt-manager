@@ -20,6 +20,49 @@
             <a v-else :href="scope.row.url" target="_blank" class="text-truncate d-block">{{ scope.row.url }}</a>
           </template>
         </el-table-column>
+        <el-table-column prop="username" label="用户名" min-width="120">
+          <template #default="scope">
+            <el-input v-if="scope.row.editing && isMTeam(scope.row)" v-model="scope.row.username" placeholder="M-Team 用户名" />
+            <span v-else class="text-truncate">{{ isMTeam(scope.row) ? (scope.row.username || '') : '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="password" label="密码" min-width="120">
+          <template #default="scope">
+            <el-input v-if="scope.row.editing && isMTeam(scope.row)" v-model="scope.row.password" type="password" show-password placeholder="M-Team 密码" />
+            <span v-else class="text-truncate">{{ isMTeam(scope.row) ? (scope.row.password ? '******' : '') : '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="totpSecret" label="2FA密钥" min-width="140">
+          <template #default="scope">
+            <el-input
+              v-if="scope.row.editing && isMTeam(scope.row)"
+              v-model="scope.row.totpSecret"
+              type="password"
+              show-password
+              placeholder="TOTP Secret"
+            />
+            <span v-else class="text-truncate">{{ isMTeam(scope.row) ? (scope.row.totpSecret ? '******' : '') : '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="自动登录" width="100" align="center">
+          <template #default="scope">
+            <el-switch
+              v-if="isMTeam(scope.row)"
+              v-model="scope.row.autoLogin"
+              @change="handleSwitchChange"
+            />
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="动态码" width="120" align="center">
+          <template #default="scope">
+            <template v-if="isMTeam(scope.row) && scope.row.totpSecret">
+              <span class="otp-code">{{ getOtpCode(scope.row.id) }}</span>
+              <span class="otp-remaining">{{ getOtpRemaining(scope.row.id) }}</span>
+            </template>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column label="自动打开" width="100" align="center">
           <template #default="scope">
             <el-switch
@@ -73,6 +116,22 @@
             <el-input v-if="site.editing" v-model="site.url" size="small" />
             <a v-else :href="site.url" target="_blank">{{ site.url }}</a>
           </div>
+          <div class="site-otp mt-2" v-if="isMTeam(site)">
+            <div class="otp-row">
+              <span>自动登录</span>
+              <el-switch v-model="site.autoLogin" size="small" @change="handleSwitchChange" />
+            </div>
+            <div class="otp-row" v-if="site.totpSecret">
+              <span class="otp-code">{{ getOtpCode(site.id) }}</span>
+              <span class="otp-remaining">{{ getOtpRemaining(site.id) }}</span>
+            </div>
+          </div>
+          <div class="site-credentials mt-2" v-if="site.editing || (isMTeam(site) && (site.username || site.totpSecret))">
+            <el-input v-if="site.editing && isMTeam(site)" v-model="site.username" placeholder="用户名" size="small" class="mb-1" />
+            <div v-else-if="isMTeam(site) && site.username">用户: {{ site.username }}</div>
+            <el-input v-if="site.editing && isMTeam(site)" v-model="site.password" placeholder="密码" type="password" show-password size="small" class="mb-1" />
+            <el-input v-if="site.editing && isMTeam(site)" v-model="site.totpSecret" placeholder="2FA密钥 (TOTP Secret)" type="password" show-password size="small" />
+          </div>
         </div>
         <div class="card-footer">
           <template v-if="!site.editing">
@@ -91,22 +150,34 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { Edit, Delete, Link, Check, Close, Plus } from '@element-plus/icons-vue'
 
 interface Site {
   id: string
   name: string
   url: string
+  username?: string
+  password?: string
+  totpSecret?: string
+  autoLogin?: boolean
   active?: boolean
   editing?: boolean
 }
 
 const sites = ref<Site[]>([])
 const store = ref<any>({})
+const otpState = ref<Record<string, { code: string; remaining: number; step: number; secret: string }>>({})
+let otpTimer: number | null = null
 
 onMounted(async () => {
   await loadStore()
+  startOtpTimer()
+})
+
+onUnmounted(() => {
+  if (otpTimer) window.clearInterval(otpTimer)
+  otpTimer = null
 })
 
 const loadStore = async () => {
@@ -115,7 +186,8 @@ const loadStore = async () => {
     store.value = await ipc.invoke('get-store')
     sites.value = (store.value.sites || []).map((s: any) => ({
       ...s,
-      active: s.active !== false // default true
+      active: s.active !== false,
+      autoLogin: (s.id === 'mteam' || String(s.url || '').includes('m-team')) ? (s.autoLogin !== false) : false
     }))
   } else {
     sites.value = [
@@ -127,6 +199,53 @@ const loadStore = async () => {
 const saveStore = async () => {
   store.value.sites = sites.value.map(({ editing, ...rest }) => rest)
   await (window as any).ipcRenderer.invoke('save-store', JSON.parse(JSON.stringify(store.value)))
+}
+
+const isMTeam = (site: Site) => {
+  const url = site.url || ''
+  return site.id === 'mteam' || url.includes('m-team')
+}
+
+const getOtpCode = (id: string) => {
+  return otpState.value[id]?.code || '------'
+}
+
+const getOtpRemaining = (id: string) => {
+  const r = otpState.value[id]?.remaining
+  if (!r && r !== 0) return ''
+  return `(${r}s)`
+}
+
+const startOtpTimer = () => {
+  const ipc = (window as any).ipcRenderer
+  if (!ipc || !ipc.invoke) return
+
+  const tick = async () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const step = Math.floor(nowSec / 30)
+    const remaining = 30 - (nowSec % 30)
+
+    const mteamSites = sites.value.filter(s => isMTeam(s) && !!s.totpSecret)
+    for (const s of mteamSites) {
+      const prev = otpState.value[s.id]
+      const secret = String(s.totpSecret || '')
+      const needFetch = !prev || prev.step !== step || prev.secret !== secret
+      if (needFetch) {
+        try {
+          const code = await ipc.invoke('get-totp', secret)
+          otpState.value[s.id] = { code: String(code || ''), remaining, step, secret }
+        } catch {
+          otpState.value[s.id] = { code: '------', remaining, step, secret }
+        }
+      } else {
+        otpState.value[s.id] = { ...prev, remaining }
+      }
+    }
+  }
+
+  if (otpTimer) window.clearInterval(otpTimer)
+  otpTimer = window.setInterval(() => { void tick() }, 1000)
+  void tick()
 }
 
 const handleSwitchChange = async () => {
@@ -260,5 +379,30 @@ const handleOpen = (row: Site) => {
 
 .site-url a:hover {
   text-decoration: underline;
+}
+
+.mt-2 { margin-top: 0.5rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.site-credentials {
+  font-size: 0.9rem;
+  color: var(--gray-600);
+}
+
+.otp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.otp-code {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.otp-remaining {
+  margin-left: 6px;
+  color: var(--gray-500);
+  font-size: 12px;
 }
 </style>

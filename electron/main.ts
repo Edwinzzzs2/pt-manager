@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import { initScheduler, startScheduler, runTask, openSite } from './scheduler'
 import { getStore, saveStore } from './store'
 import { getLogs } from './logger'
+import { generateTotp } from './totp'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -138,6 +139,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('open-external', async (_event, url) => {
     await openSite(url)
+  })
+
+  ipcMain.handle('get-totp', (_event, secret: string) => {
+    return generateTotp(String(secret || ''))
   })
 
   createWindow()

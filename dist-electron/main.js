@@ -5,6 +5,7 @@ import fs$1 from "node:fs";
 import path from "path";
 import fs from "fs";
 import { createRequire } from "node:module";
+import { createHmac } from "node:crypto";
 const storePath = path.join(app.getPath("userData"), "store.json");
 const defaultData = {
   cron: "0 9 * * *",
@@ -16,7 +17,11 @@ const defaultData = {
       id: "mteam",
       name: "M-Team",
       url: "https://kp.m-team.cc",
-      active: true
+      active: true,
+      autoLogin: true,
+      username: "",
+      password: "",
+      totpSecret: ""
     },
     {
       id: "chdbits",
@@ -64,6 +69,87 @@ function getLogs() {
   } catch (e) {
     return [];
   }
+}
+function base32ToBuffer(input) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const clean = String(input).toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let bits = 0;
+  let value = 0;
+  const bytes = [];
+  for (const ch of clean) {
+    const idx = alphabet.indexOf(ch);
+    if (idx === -1) continue;
+    value = value << 5 | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push(value >>> bits - 8 & 255);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(bytes);
+}
+function extractOtpAuthParams(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("otpauth://")) {
+    try {
+      const u = new URL(raw);
+      const secret = u.searchParams.get("secret") || "";
+      const digits = Number(u.searchParams.get("digits") || "6");
+      const period = Number(u.searchParams.get("period") || "30");
+      const algorithm = (u.searchParams.get("algorithm") || "SHA1").toUpperCase();
+      return { secret, digits, period, algorithm };
+    } catch {
+      return null;
+    }
+  }
+  if (raw.includes("secret=")) {
+    try {
+      const u = new URL(raw.includes("://") ? raw : `https://local.invalid/?${raw.replace(/^[?#]/, "")}`);
+      const secret = u.searchParams.get("secret") || "";
+      const digits = Number(u.searchParams.get("digits") || "6");
+      const period = Number(u.searchParams.get("period") || "30");
+      const algorithm = (u.searchParams.get("algorithm") || "SHA1").toUpperCase();
+      return { secret, digits, period, algorithm };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+function secretToKey(input) {
+  const raw = String(input || "").trim().replace(/\s+/g, "");
+  if (!raw) return Buffer.alloc(0);
+  if (/^[0-9a-f]+$/i.test(raw) && raw.length % 2 === 0) {
+    try {
+      return Buffer.from(raw, "hex");
+    } catch {
+    }
+  }
+  const b32 = base32ToBuffer(raw);
+  if (b32.length) return b32;
+  try {
+    const b64 = Buffer.from(raw, "base64");
+    if (b64.length) return b64;
+  } catch {
+  }
+  return Buffer.from(raw, "utf8");
+}
+function generateTotp(secretInput, digits = 6, period = 30) {
+  const params = extractOtpAuthParams(secretInput);
+  const secret = (params == null ? void 0 : params.secret) ?? secretInput;
+  const d = Number.isFinite(params == null ? void 0 : params.digits) ? params.digits || digits : digits;
+  const p = Number.isFinite(params == null ? void 0 : params.period) ? params.period || period : period;
+  const algo = ((params == null ? void 0 : params.algorithm) || "SHA1").toLowerCase();
+  const key = secretToKey(secret);
+  if (!key.length) return "";
+  const counter = BigInt(Math.floor(Date.now() / 1e3 / p));
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(counter, 0);
+  const hmac = createHmac(algo, key).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 15;
+  const code = ((hmac.readUInt32BE(offset) & 2147483647) % 10 ** d).toString().padStart(d, "0");
+  return code;
 }
 let cronLib = null;
 let task = null;
@@ -196,9 +282,135 @@ async function openSites(urls) {
     }
   });
   siteWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
+  const store = getStore();
+  const sites = store.sites || [];
+  siteWindow.webContents.on("did-attach-webview", (event, webContents) => {
+    webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url);
+      return { action: "deny" };
+    });
+    webContents.on("console-message", (_event, level, message, line, sourceId) => {
+      log(`[webview:${level}] ${message} (${sourceId}:${line})`);
+    });
+    webContents.on("dom-ready", async () => {
+      const url = webContents.getURL();
+      let site = null;
+      try {
+        site = sites.find((s) => url.includes(new URL(s.url).hostname));
+      } catch {
+      }
+      const allowAutoLogin = site && site.autoLogin !== false;
+      if (allowAutoLogin && site.username && site.password && (url.includes("m-team") || url.includes("kp.m-team"))) {
+        const username = JSON.stringify(String(site.username));
+        const password = JSON.stringify(String(site.password));
+        site.totpSecret ? JSON.stringify(generateTotp(String(site.totpSecret))) : '""';
+        const loginScript = `
+                    (function() {
+                        function logx() {
+                            try { console.log.apply(console, arguments) } catch (e) {}
+                        }
+                        logx('--- M-Team AutoLogin ---', location.href);
+
+                        function setNativeValue(el, value) {
+                            try {
+                                var valueSetter = Object.getOwnPropertyDescriptor(el, 'value') && Object.getOwnPropertyDescriptor(el, 'value').set;
+                                var proto = Object.getPrototypeOf(el);
+                                var protoSetter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+                                if (protoSetter) protoSetter.call(el, value);
+                                else if (valueSetter) valueSetter.call(el, value);
+                                else el.value = value;
+                            } catch (e) {
+                                try { el.value = value } catch (e2) {}
+                            }
+                            try { el.dispatchEvent(new Event('input', { bubbles: true })) } catch (e3) {}
+                            try { el.dispatchEvent(new Event('change', { bubbles: true })) } catch (e4) {}
+                        }
+
+                        function attempt() {
+                            var userEl = document.querySelector('#username') || document.querySelector('input[name="username"]');
+                            var passEl = document.querySelector('#password') || document.querySelector('input[name="password"]');
+                            var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
+                            logx('found', !!userEl, !!passEl, !!btn);
+                            if (!userEl || !passEl) return;
+
+                            var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
+                            if (bodyText.indexOf('Logout') >= 0 || bodyText.indexOf('注销') >= 0 || bodyText.indexOf('登出') >= 0) {
+                                logx('already logged in');
+                                return;
+                            }
+
+                            try { userEl.focus() } catch (e5) {}
+                            setNativeValue(userEl, ${username});
+                            try { passEl.focus() } catch (e6) {}
+                            setNativeValue(passEl, ${password});
+
+                            if (btn) {
+                                setTimeout(function() {
+                                    try { btn.click() } catch (e7) { logx('click failed', e7) }
+                                }, 300);
+                            }
+                        }
+
+                        attempt();
+                        setTimeout(attempt, 1000);
+                        setTimeout(attempt, 3000);
+                    })();
+                `;
+        try {
+          await webContents.executeJavaScript(loginScript, true);
+          log(`Tried auto-login for ${site.name}`);
+        } catch (e) {
+          log(`Auto-login script failed for ${site.name}: ${e}`);
+        }
+      }
+      if (allowAutoLogin && site.totpSecret && (url.includes("m-team") || url.includes("kp.m-team"))) {
+        const otpScript = `
+                    (function() {
+                        function logx() {
+                            try { console.log.apply(console, arguments) } catch (e) {}
+                        }
+                        var otpEl = document.querySelector('#otp-code') || document.querySelector('input[name="otp"]') || document.querySelector('input[autocomplete="one-time-code"]');
+                        if (!otpEl) return;
+
+                        var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
+                        logx('--- M-Team OTP ---', location.href, 'found', !!otpEl, !!btn);
+
+                        function setNativeValue(el, value) {
+                            try {
+                                var valueSetter = Object.getOwnPropertyDescriptor(el, 'value') && Object.getOwnPropertyDescriptor(el, 'value').set;
+                                var proto = Object.getPrototypeOf(el);
+                                var protoSetter = Object.getOwnPropertyDescriptor(proto, 'value') && Object.getOwnPropertyDescriptor(proto, 'value').set;
+                                if (protoSetter) protoSetter.call(el, value);
+                                else if (valueSetter) valueSetter.call(el, value);
+                                else el.value = value;
+                            } catch (e) {
+                                try { el.value = value } catch (e2) {}
+                            }
+                            try { el.dispatchEvent(new Event('input', { bubbles: true })) } catch (e3) {}
+                            try { el.dispatchEvent(new Event('change', { bubbles: true })) } catch (e4) {}
+                        }
+
+                        try { otpEl.focus() } catch (e5) {}
+                        setNativeValue(otpEl, ${otp});
+
+                        if (btn) {
+                            setTimeout(function() {
+                                try { btn.click() } catch (e6) { logx('otp click failed', e6) }
+                            }, 200);
+                        }
+                    })();
+                `;
+        try {
+          await webContents.executeJavaScript(otpScript, true);
+          log(`Tried OTP for ${site.name}`);
+        } catch (e) {
+          log(`OTP script failed for ${site.name}: ${e}`);
+        }
+      }
+    });
+  });
   const tabsHtml = path$1.join(process.env.VITE_PUBLIC, "site-tabs.html");
   await siteWindow.loadFile(tabsHtml, { search: `?urls=${encodeURIComponent(JSON.stringify(urls))}` });
-  const store = getStore();
   const duration = (store.duration || 5) * 60 * 1e3;
   const timeout = setTimeout(() => {
     try {
@@ -349,6 +561,9 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("open-external", async (_event, url) => {
     await openSite(url);
+  });
+  ipcMain.handle("get-totp", (_event, secret) => {
+    return generateTotp(String(secret || ""));
   });
   createWindow();
 });

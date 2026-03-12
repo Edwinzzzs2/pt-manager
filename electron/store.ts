@@ -13,7 +13,11 @@ const defaultData = {
       id: "mteam",
       name: "M-Team",
       url: "https://kp.m-team.cc",
-      active: true
+      active: true,
+      autoLogin: true,
+      username: "",
+      password: "",
+      totpSecret: ""
     },
     {
       id: "chdbits",
