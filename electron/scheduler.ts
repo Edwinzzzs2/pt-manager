@@ -11,6 +11,26 @@ let task: any | null = null
 let enabled = true
 let siteWindow: BrowserWindow | null = null
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const mteamAttempts = new Map<number, {
+    login: number
+    otp: number
+    loginStopped: boolean
+    otpStopped: boolean
+    loggedInNotified: boolean
+    otpNoInputNotified: boolean
+}>()
+const mteamLastLogAt = new Map<number, { login?: number, otp?: number }>()
+
+function oncePerSecond(key: 'login' | 'otp', wcId: number) {
+    const now = Date.now()
+    const last = mteamLastLogAt.get(wcId) || {}
+    const prev = (key === 'login' ? last.login : last.otp) || 0
+    if (now - prev < 1000) return false
+    if (key === 'login') last.login = now
+    else last.otp = now
+    mteamLastLogAt.set(wcId, last)
+    return true
+}
 
 export function initScheduler() {
     const store = getStore()
@@ -147,33 +167,58 @@ export async function openSites(urls: string[]) {
     const sites = store.sites || []
     
     siteWindow.webContents.on('did-attach-webview', (_event, webContents) => {
-        webContents.setWindowOpenHandler(({ url }) => {
-            shell.openExternal(url)
-            return { action: 'deny' }
-        })
+        const wcId = webContents.id
+        if (!mteamAttempts.has(wcId)) {
+            mteamAttempts.set(wcId, {
+                login: 0,
+                otp: 0,
+                loginStopped: false,
+                otpStopped: false,
+                loggedInNotified: false,
+                otpNoInputNotified: false
+            })
+        }
+        webContents.once('destroyed', () => { try { mteamAttempts.delete(wcId); mteamLastLogAt.delete(wcId) } catch {} })
 
-        webContents.on('console-message', (_event, level, message, line, sourceId) => {
-            log(`[webview:${level}] ${message} (${sourceId}:${line})`)
-        })
-
-        webContents.on('dom-ready', async () => {
-            const url = webContents.getURL()
-            let site: any = null
+        const findSiteForUrl = (url: string) => {
             try {
-                site = sites.find((s: any) => url.includes(new URL(s.url).hostname))
-            } catch {}
+                return sites.find((s: any) => url.includes(new URL(s.url).hostname))
+            } catch {
+                return null
+            }
+        }
 
+        const runMTeamAutoFlows = async () => {
+            const url = webContents.getURL()
+            const site: any = findSiteForUrl(url)
             const allowAutoLogin = site && site.autoLogin !== false
-            if (allowAutoLogin && site.username && site.password && (url.includes('m-team') || url.includes('kp.m-team'))) {
+            const isMTeam = url.includes('m-team') || url.includes('kp.m-team')
+            if (!isMTeam) return
+
+            const st = mteamAttempts.get(wcId)
+            if (!st) return
+
+            let pathName = ''
+            try { pathName = new URL(url).pathname || '' } catch {}
+            if (pathName === '/index' || pathName.startsWith('/index/')) {
+                if (!st.loggedInNotified) {
+                    st.loggedInNotified = true
+                    log('M-Team：已进入首页(index)，视为登录成功')
+                }
+                st.loginStopped = true
+                st.otpStopped = true
+                return
+            }
+
+            if (allowAutoLogin && !st.loginStopped && site.username && site.password) {
+                if (st.login >= 3) {
+                    st.loginStopped = true
+                    log('M-Team：自动登录已达最大尝试次数(3)，已停止')
+                } else {
                 const username = JSON.stringify(String(site.username))
                 const password = JSON.stringify(String(site.password))
                 const loginScript = `
                     (function() {
-                        function logx() {
-                            try { console.log.apply(console, arguments) } catch (e) {}
-                        }
-                        logx('--- M-Team AutoLogin ---', location.href);
-
                         function setNativeValue(el, value) {
                             try {
                                 var valueSetter = Object.getOwnPropertyDescriptor(el, 'value') && Object.getOwnPropertyDescriptor(el, 'value').set;
@@ -189,17 +234,35 @@ export async function openSites(urls: string[]) {
                             try { el.dispatchEvent(new Event('change', { bubbles: true })) } catch (e4) {}
                         }
 
+                        function hasShareRate() {
+                            try { return (document.body && (document.body.innerText || '').indexOf('分享率') >= 0) } catch (e) { return false }
+                        }
+
+                        function isBtnLoading(btn) {
+                            try {
+                                if (!btn) return false;
+                                if (btn.disabled) return true;
+                                if (btn.getAttribute && btn.getAttribute('aria-busy') === 'true') return true;
+                                if (btn.classList && btn.classList.contains('ant-btn-loading')) return true;
+                                if (btn.querySelector && btn.querySelector('.ant-btn-loading-icon')) return true;
+                                return false;
+                            } catch (e) {
+                                return false;
+                            }
+                        }
+
                         function attempt() {
+                            if (location.pathname === '/index' || hasShareRate()) return 'logged_in';
                             var userEl = document.querySelector('#username') || document.querySelector('input[name="username"]');
                             var passEl = document.querySelector('#password') || document.querySelector('input[name="password"]');
                             var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
-                            logx('found', !!userEl, !!passEl, !!btn);
-                            if (!userEl || !passEl) return;
+                            if (!userEl || !passEl) return 'no_form';
+                            if (isBtnLoading(btn)) return 'loading';
+                            if (window.__PTM_LOGIN_SUBMITTED) return 'waiting';
 
                             var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
                             if (bodyText.indexOf('Logout') >= 0 || bodyText.indexOf('注销') >= 0 || bodyText.indexOf('登出') >= 0) {
-                                logx('already logged in');
-                                return;
+                                return 'logged_in';
                             }
 
                             try { userEl.focus() } catch (e5) {}
@@ -209,36 +272,64 @@ export async function openSites(urls: string[]) {
 
                             if (btn) {
                                 setTimeout(function() {
-                                    try { btn.click() } catch (e7) { logx('click failed', e7) }
+                                    try { btn.click() } catch (e7) {}
                                 }, 300);
                             }
+                            window.__PTM_LOGIN_SUBMITTED = true;
+                            return 'submitted';
                         }
 
-                        attempt();
-                        setTimeout(attempt, 1000);
-                        setTimeout(attempt, 3000);
+                        return attempt();
                     })();
                 `
                 try {
-                    await webContents.executeJavaScript(loginScript, true)
-                    log(`Tried auto-login for ${site.name}`)
+                    const result = await webContents.executeJavaScript(loginScript, true)
+                    if (result === 'submitted') {
+                        st.login += 1
+                        log('M-Team：检测到未登录，已填写账号密码并提交')
+                    } else if (result === 'loading') {
+                        if (oncePerSecond('login', wcId)) log('M-Team：登录中(按钮loading)，等待跳转')
+                    } else if (result === 'logged_in') {
+                        st.loginStopped = true
+                        if (!st.loggedInNotified) {
+                            st.loggedInNotified = true
+                            log('M-Team：已处于登录态，跳过自动登录')
+                        }
+                    }
                 } catch (e) {
-                    log(`Auto-login script failed for ${site.name}: ${e}`)
+                    log(`M-Team：自动登录脚本执行失败：${e}`)
+                }
                 }
             }
 
-            if (allowAutoLogin && site.totpSecret && (url.includes('m-team') || url.includes('kp.m-team'))) {
+            if (allowAutoLogin && !st.otpStopped && site?.totpSecret) {
+                if (st.otp >= 3) {
+                    st.otpStopped = true
+                    log('M-Team：验证码已达最大尝试次数(3)，已停止')
+                    return
+                }
+
                 const otp = JSON.stringify(generateTotp(String(site.totpSecret)))
                 const otpScript = `
                     (function() {
-                        function logx() {
-                            try { console.log.apply(console, arguments) } catch (e) {}
+                        function isOtpStage() {
+                            var tabs = document.querySelector('.ant-tabs-nav-wrap');
+                            if (!tabs) return false;
+                            var t = (tabs.innerText || '') + ' ' + (document.body && document.body.innerText ? document.body.innerText : '');
+                            return t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0;
                         }
-                        var otpEl = document.querySelector('#otp-code') || document.querySelector('input[name="otp"]') || document.querySelector('input[autocomplete="one-time-code"]');
-                        if (!otpEl) return;
 
-                        var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
-                        logx('--- M-Team OTP ---', location.href, 'found', !!otpEl, !!btn);
+                        function hasShareRate() {
+                            try { return (document.body && (document.body.innerText || '').indexOf('分享率') >= 0) } catch (e) { return false }
+                        }
+
+                        function findOtpEl() {
+                            return (
+                                document.querySelector('#otp-code') ||
+                                document.querySelector('input[autocomplete="one-time-code"]') ||
+                                document.querySelector('input[name="otp"]')
+                            );
+                        }
 
                         function setNativeValue(el, value) {
                             try {
@@ -255,23 +346,75 @@ export async function openSites(urls: string[]) {
                             try { el.dispatchEvent(new Event('change', { bubbles: true })) } catch (e4) {}
                         }
 
+                        if (location.pathname === '/index' || hasShareRate()) return 'not_needed';
+                        if (!isOtpStage()) return 'not_stage';
+
+                        var otpEl = findOtpEl();
+                        if (!otpEl) return 'no_input';
+
+                        var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
                         try { otpEl.focus() } catch (e5) {}
                         setNativeValue(otpEl, ${otp});
 
                         if (btn) {
-                            setTimeout(function() {
-                                try { btn.click() } catch (e6) { logx('otp click failed', e6) }
-                            }, 200);
+                            setTimeout(function() { try { btn.click() } catch (e6) {} }, 200);
+                            return 'submitted';
                         }
+
+                        return 'no_button';
                     })();
                 `
+
                 try {
-                    await webContents.executeJavaScript(otpScript, true)
-                    log(`Tried OTP for ${site.name}`)
+                    const result = await webContents.executeJavaScript(otpScript, true)
+                    if (result === 'submitted') {
+                        st.otp += 1
+                        log('M-Team：二次验证，已填写验证码并提交')
+                    } else if (result === 'not_needed') {
+                        st.otpStopped = true
+                    } else if (result === 'no_input') {
+                        if (!st.otpNoInputNotified) {
+                            st.otpNoInputNotified = true
+                            log('M-Team：二次验证页未找到验证码输入框，稍后重试')
+                        }
+                    }
                 } catch (e) {
-                    log(`OTP script failed for ${site.name}: ${e}`)
+                    log(`M-Team：二次验证码脚本执行失败：${e}`)
                 }
             }
+        }
+
+        let mteamCheckTimer: NodeJS.Timeout | null = null
+        const scheduleMTeamChecks = () => {
+            if (mteamCheckTimer) return
+            const delays = [0, 400, 1200, 2500, 4500]
+            for (const d of delays) {
+                setTimeout(() => { void runMTeamAutoFlows() }, d)
+            }
+            mteamCheckTimer = setTimeout(() => { mteamCheckTimer = null }, 5500)
+        }
+
+        webContents.setWindowOpenHandler(({ url }) => {
+            shell.openExternal(url)
+            return { action: 'deny' }
+        })
+
+        webContents.on('console-message', (_event, _level, message) => {
+            if (typeof message === 'string' && message.startsWith('[PTM] ')) {
+                log(message.replace(/^\[PTM\]\s*/, '').trim())
+            }
+        })
+
+        webContents.on('dom-ready', async () => {
+            scheduleMTeamChecks()
+        })
+
+        webContents.on('did-navigate', () => {
+            scheduleMTeamChecks()
+        })
+
+        webContents.on('did-navigate-in-page', () => {
+            scheduleMTeamChecks()
         })
     })
 
