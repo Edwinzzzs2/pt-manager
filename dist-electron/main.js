@@ -1,24 +1,23 @@
-import { app, BrowserWindow, shell, nativeImage, Tray, Menu, session, ipcMain } from "electron";
-import { fileURLToPath } from "node:url";
-import path$1 from "node:path";
-import fs$1 from "node:fs";
-import path from "path";
-import fs from "fs";
-import { createRequire } from "node:module";
-import { createHmac } from "node:crypto";
-const storePath = path.join(app.getPath("userData"), "store.json");
-const defaultData = {
+import { app as a, BrowserWindow as I, shell as A, nativeImage as w, Tray as W, Menu as H, session as D, ipcMain as T } from "electron";
+import { fileURLToPath as N } from "node:url";
+import p from "node:path";
+import J from "node:fs";
+import O from "path";
+import m from "fs";
+import { createRequire as K } from "node:module";
+import { createHmac as z } from "node:crypto";
+const E = O.join(a.getPath("userData"), "store.json"), j = {
   cron: "0 9 * * *",
   duration: 5,
   // duration in minutes
-  autoLaunch: false,
+  autoLaunch: !1,
   sites: [
     {
       id: "mteam",
       name: "M-Team",
       url: "https://kp.m-team.cc",
-      active: true,
-      autoLogin: true,
+      active: !0,
+      autoLogin: !0,
       username: "",
       password: "",
       totpSecret: ""
@@ -27,284 +26,221 @@ const defaultData = {
       id: "chdbits",
       name: "CHD",
       url: "https://chdbits.co",
-      active: true
+      active: !0
     }
   ]
 };
-function getStore() {
-  if (!fs.existsSync(storePath)) {
-    const dir = path.dirname(storePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(storePath, JSON.stringify(defaultData, null, 2));
-    return defaultData;
+function P() {
+  if (!m.existsSync(E)) {
+    const e = O.dirname(E);
+    return m.existsSync(e) || m.mkdirSync(e, { recursive: !0 }), m.writeFileSync(E, JSON.stringify(j, null, 2)), j;
   }
   try {
-    return JSON.parse(fs.readFileSync(storePath, "utf-8"));
-  } catch (e) {
-    return defaultData;
+    return JSON.parse(m.readFileSync(E, "utf-8"));
+  } catch {
+    return j;
   }
 }
-function saveStore(data) {
-  fs.writeFileSync(storePath, JSON.stringify(data, null, 2));
+function G(e) {
+  m.writeFileSync(E, JSON.stringify(e, null, 2));
 }
-const logPath = path.join(app.getPath("userData"), "app.log");
-function log(message) {
-  const time = (/* @__PURE__ */ new Date()).toLocaleString();
-  const line = `[${time}] ${message}
+const k = O.join(a.getPath("userData"), "app.log");
+function u(e) {
+  const r = `[${(/* @__PURE__ */ new Date()).toLocaleString()}] ${e}
 `;
   try {
-    fs.appendFileSync(logPath, line);
-    console.log(line.trim());
-  } catch (e) {
-    console.error("Failed to write log", e);
+    m.appendFileSync(k, r), console.log(r.trim());
+  } catch (n) {
+    console.error("Failed to write log", n);
   }
 }
-function getLogs() {
-  if (!fs.existsSync(logPath)) return [];
+function Q() {
+  if (!m.existsSync(k)) return [];
   try {
-    const content = fs.readFileSync(logPath, "utf-8");
-    return content.split("\n").filter((l) => l).reverse().slice(0, 100);
-  } catch (e) {
+    return m.readFileSync(k, "utf-8").split(`
+`).filter((t) => t).reverse().slice(0, 100);
+  } catch {
     return [];
   }
 }
-function base32ToBuffer(input) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const clean = String(input).toUpperCase().replace(/[^A-Z2-7]/g, "");
-  let bits = 0;
-  let value = 0;
-  const bytes = [];
-  for (const ch of clean) {
-    const idx = alphabet.indexOf(ch);
-    if (idx === -1) continue;
-    value = value << 5 | idx;
-    bits += 5;
-    if (bits >= 8) {
-      bytes.push(value >>> bits - 8 & 255);
-      bits -= 8;
-    }
+function Z(e) {
+  const t = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", r = String(e).toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let n = 0, s = 0;
+  const i = [];
+  for (const y of r) {
+    const f = t.indexOf(y);
+    f !== -1 && (s = s << 5 | f, n += 5, n >= 8 && (i.push(s >>> n - 8 & 255), n -= 8));
   }
-  return Buffer.from(bytes);
+  return Buffer.from(i);
 }
-function extractOtpAuthParams(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return null;
-  if (raw.startsWith("otpauth://")) {
+function X(e) {
+  const t = String(e || "").trim();
+  if (!t) return null;
+  if (t.startsWith("otpauth://"))
     try {
-      const u = new URL(raw);
-      const secret = u.searchParams.get("secret") || "";
-      const digits = Number(u.searchParams.get("digits") || "6");
-      const period = Number(u.searchParams.get("period") || "30");
-      const algorithm = (u.searchParams.get("algorithm") || "SHA1").toUpperCase();
-      return { secret, digits, period, algorithm };
+      const r = new URL(t), n = r.searchParams.get("secret") || "", s = Number(r.searchParams.get("digits") || "6"), i = Number(r.searchParams.get("period") || "30"), y = (r.searchParams.get("algorithm") || "SHA1").toUpperCase();
+      return { secret: n, digits: s, period: i, algorithm: y };
     } catch {
       return null;
     }
-  }
-  if (raw.includes("secret=")) {
+  if (t.includes("secret="))
     try {
-      const u = new URL(raw.includes("://") ? raw : `https://local.invalid/?${raw.replace(/^[?#]/, "")}`);
-      const secret = u.searchParams.get("secret") || "";
-      const digits = Number(u.searchParams.get("digits") || "6");
-      const period = Number(u.searchParams.get("period") || "30");
-      const algorithm = (u.searchParams.get("algorithm") || "SHA1").toUpperCase();
-      return { secret, digits, period, algorithm };
+      const r = new URL(t.includes("://") ? t : `https://local.invalid/?${t.replace(/^[?#]/, "")}`), n = r.searchParams.get("secret") || "", s = Number(r.searchParams.get("digits") || "6"), i = Number(r.searchParams.get("period") || "30"), y = (r.searchParams.get("algorithm") || "SHA1").toUpperCase();
+      return { secret: n, digits: s, period: i, algorithm: y };
     } catch {
       return null;
     }
-  }
   return null;
 }
-function secretToKey(input) {
-  const raw = String(input || "").trim().replace(/\s+/g, "");
-  if (!raw) return Buffer.alloc(0);
-  if (/^[0-9a-f]+$/i.test(raw) && raw.length % 2 === 0) {
+function Y(e) {
+  const t = String(e || "").trim().replace(/\s+/g, "");
+  if (!t) return Buffer.alloc(0);
+  if (/^[0-9a-f]+$/i.test(t) && t.length % 2 === 0)
     try {
-      return Buffer.from(raw, "hex");
+      return Buffer.from(t, "hex");
     } catch {
     }
-  }
-  const b32 = base32ToBuffer(raw);
-  if (b32.length) return b32;
+  const r = Z(t);
+  if (r.length) return r;
   try {
-    const b64 = Buffer.from(raw, "base64");
-    if (b64.length) return b64;
+    const n = Buffer.from(t, "base64");
+    if (n.length) return n;
   } catch {
   }
-  return Buffer.from(raw, "utf8");
+  return Buffer.from(t, "utf8");
 }
-function generateTotp(secretInput, digits = 6, period = 30) {
-  const params = extractOtpAuthParams(secretInput);
-  const secret = (params == null ? void 0 : params.secret) ?? secretInput;
-  const d = Number.isFinite(params == null ? void 0 : params.digits) ? params.digits || digits : digits;
-  const p = Number.isFinite(params == null ? void 0 : params.period) ? params.period || period : period;
-  const algo = ((params == null ? void 0 : params.algorithm) || "SHA1").toLowerCase();
-  const key = secretToKey(secret);
-  if (!key.length) return "";
-  const counter = BigInt(Math.floor(Date.now() / 1e3 / p));
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64BE(counter, 0);
-  const hmac = createHmac(algo, key).update(buf).digest();
-  const offset = hmac[hmac.length - 1] & 15;
-  const code = ((hmac.readUInt32BE(offset) & 2147483647) % 10 ** d).toString().padStart(d, "0");
-  return code;
+function B(e, t = 6, r = 30) {
+  const n = X(e), s = (n == null ? void 0 : n.secret) ?? e, i = Number.isFinite(n == null ? void 0 : n.digits) && n.digits || t, y = Number.isFinite(n == null ? void 0 : n.period) && n.period || r, f = ((n == null ? void 0 : n.algorithm) || "SHA1").toLowerCase(), d = Y(s);
+  if (!d.length) return "";
+  const c = BigInt(Math.floor(Date.now() / 1e3 / y)), S = Buffer.alloc(8);
+  S.writeBigUInt64BE(c, 0);
+  const h = z(f, d).update(S).digest(), v = h[h.length - 1] & 15;
+  return ((h.readUInt32BE(v) & 2147483647) % 10 ** i).toString().padStart(i, "0");
 }
-let cronLib = null;
-let task = null;
-let enabled = true;
-let siteWindow = null;
-const __dirname$2 = path$1.dirname(fileURLToPath(import.meta.url));
-function initScheduler() {
-  const store = getStore();
-  startScheduler(store.cron);
+let L = null, g = null, $ = !0, o = null;
+const ee = p.dirname(N(import.meta.url));
+function te() {
+  const e = P();
+  _(e.cron);
 }
-async function ensureCron() {
-  if (cronLib) return;
+async function re() {
+  if (L) return;
   try {
-    const require2 = createRequire(import.meta.url);
-    cronLib = require2("node-cron");
+    L = K(import.meta.url)("node-cron");
     return;
   } catch {
   }
-  const mod = await import("node-cron");
-  cronLib = mod.default ?? mod;
+  const e = await import("node-cron");
+  L = e.default ?? e;
 }
-async function startScheduler(cronExpression) {
-  if (task) {
-    task.stop();
-  }
-  log(`Starting scheduler with cron: ${cronExpression}`);
+async function _(e) {
+  g && g.stop(), u(`Starting scheduler with cron: ${e}`);
   try {
-    await ensureCron();
-    task = cronLib.schedule(cronExpression, () => {
-      if (enabled) runTask();
+    await re(), g = L.schedule(e, () => {
+      $ && U();
     });
-  } catch (e) {
-    log(`Error starting scheduler: ${e}`);
+  } catch (t) {
+    u(`Error starting scheduler: ${t}`);
   }
 }
-async function runTask() {
-  const store = getStore();
-  const urls = store.sites.filter((s) => s.active !== false && s.url).map((s) => s.url);
-  log(`Running task with ${urls.length} site(s)`);
+async function U() {
+  const t = P().sites.filter((r) => r.active !== !1 && r.url).map((r) => r.url);
+  u(`Running task with ${t.length} site(s)`);
   try {
-    await openSites(urls);
-  } catch (e) {
-    log(`Open sites failed: ${e}`);
+    await se(t);
+  } catch (r) {
+    u(`Open sites failed: ${r}`);
   }
 }
-function stopScheduler() {
-  if (task) {
-    enabled = false;
+function ne() {
+  if (g) {
+    $ = !1;
     try {
-      task.stop();
-      log("Scheduler stopped");
+      g.stop(), u("Scheduler stopped");
     } catch (e) {
-      log(`Stop scheduler failed: ${e}`);
+      u(`Stop scheduler failed: ${e}`);
     }
   }
 }
-async function startSchedulerIfStopped() {
-  enabled = true;
+async function oe() {
+  $ = !0;
   try {
-    if (!task) {
-      const store = getStore();
-      await startScheduler(store.cron);
-    } else {
-      task.start();
+    if (g)
+      g.start();
+    else {
+      const e = P();
+      await _(e.cron);
     }
-    log("Scheduler started");
+    u("Scheduler started");
   } catch (e) {
-    log(`Start scheduler failed: ${e}`);
+    u(`Start scheduler failed: ${e}`);
   }
 }
-function isSchedulerRunning() {
-  if (!task) return false;
-  const status = task.getStatus ? task.getStatus() : void 0;
-  if (status) return status === "running";
-  return enabled;
+function M() {
+  if (!g) return !1;
+  const e = g.getStatus ? g.getStatus() : void 0;
+  return e ? e === "running" : $;
 }
-function toggleScheduler() {
-  if (isSchedulerRunning()) {
-    stopScheduler();
-  } else {
-    startSchedulerIfStopped();
-  }
+function ce() {
+  M() ? ne() : oe();
 }
-async function openSite(url) {
+async function ae(e) {
   try {
-    if (siteWindow && !siteWindow.isDestroyed()) {
+    if (o && !o.isDestroyed())
       try {
-        siteWindow.destroy();
+        o.destroy();
       } catch {
       }
-    }
-    siteWindow = new BrowserWindow({
+    o = new I({
       width: 1200,
       height: 800,
-      autoHideMenuBar: true,
+      autoHideMenuBar: !0,
       webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true
+        nodeIntegration: !1,
+        contextIsolation: !0
       }
+    }), o.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"), await o.loadURL(e), o.on("closed", () => {
+      o = null;
     });
-    siteWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
-    await siteWindow.loadURL(url);
-    siteWindow.on("closed", () => {
-      siteWindow = null;
-    });
-  } catch (e) {
+  } catch {
     try {
-      await shell.openExternal(url);
+      await A.openExternal(e);
     } catch {
     }
   }
 }
-async function openSites(urls) {
-  if (siteWindow && !siteWindow.isDestroyed()) {
+async function se(e) {
+  if (o && !o.isDestroyed())
     try {
-      siteWindow.destroy();
+      o.destroy();
     } catch {
     }
-  }
-  siteWindow = new BrowserWindow({
+  o = new I({
     width: 1280,
     height: 800,
-    center: true,
-    autoHideMenuBar: true,
+    center: !0,
+    autoHideMenuBar: !0,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      webviewTag: true,
-      preload: path$1.join(__dirname$2, "preload.mjs")
+      nodeIntegration: !1,
+      contextIsolation: !0,
+      webviewTag: !0,
+      preload: p.join(ee, "preload.mjs")
     }
-  });
-  siteWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
-  const store = getStore();
-  const sites = store.sites || [];
-  siteWindow.webContents.on("did-attach-webview", (event, webContents) => {
-    webContents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url);
-      return { action: "deny" };
-    });
-    webContents.on("console-message", (_event, level, message, line, sourceId) => {
-      log(`[webview:${level}] ${message} (${sourceId}:${line})`);
-    });
-    webContents.on("dom-ready", async () => {
-      const url = webContents.getURL();
-      let site = null;
+  }), o.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
+  const t = P(), r = t.sites || [];
+  o.webContents.on("did-attach-webview", (y, f) => {
+    f.setWindowOpenHandler(({ url: d }) => (A.openExternal(d), { action: "deny" })), f.on("console-message", (d, c, S, h, v) => {
+      u(`[webview:${c}] ${S} (${v}:${h})`);
+    }), f.on("dom-ready", async () => {
+      const d = f.getURL();
+      let c = null;
       try {
-        site = sites.find((s) => url.includes(new URL(s.url).hostname));
+        c = r.find((h) => d.includes(new URL(h.url).hostname));
       } catch {
       }
-      const allowAutoLogin = site && site.autoLogin !== false;
-      if (allowAutoLogin && site.username && site.password && (url.includes("m-team") || url.includes("kp.m-team"))) {
-        const username = JSON.stringify(String(site.username));
-        const password = JSON.stringify(String(site.password));
-        site.totpSecret ? JSON.stringify(generateTotp(String(site.totpSecret))) : '""';
-        const loginScript = `
+      const S = c && c.autoLogin !== !1;
+      if (S && c.username && c.password && (d.includes("m-team") || d.includes("kp.m-team"))) {
+        const h = JSON.stringify(String(c.username)), v = JSON.stringify(String(c.password)), x = `
                     (function() {
                         function logx() {
                             try { console.log.apply(console, arguments) } catch (e) {}
@@ -340,9 +276,9 @@ async function openSites(urls) {
                             }
 
                             try { userEl.focus() } catch (e5) {}
-                            setNativeValue(userEl, ${username});
+                            setNativeValue(userEl, ${h});
                             try { passEl.focus() } catch (e6) {}
-                            setNativeValue(passEl, ${password});
+                            setNativeValue(passEl, ${v});
 
                             if (btn) {
                                 setTimeout(function() {
@@ -357,14 +293,13 @@ async function openSites(urls) {
                     })();
                 `;
         try {
-          await webContents.executeJavaScript(loginScript, true);
-          log(`Tried auto-login for ${site.name}`);
-        } catch (e) {
-          log(`Auto-login script failed for ${site.name}: ${e}`);
+          await f.executeJavaScript(x, !0), u(`Tried auto-login for ${c.name}`);
+        } catch (V) {
+          u(`Auto-login script failed for ${c.name}: ${V}`);
         }
       }
-      if (allowAutoLogin && site.totpSecret && (url.includes("m-team") || url.includes("kp.m-team"))) {
-        const otpScript = `
+      if (S && c.totpSecret && (d.includes("m-team") || d.includes("kp.m-team"))) {
+        const v = `
                     (function() {
                         function logx() {
                             try { console.log.apply(console, arguments) } catch (e) {}
@@ -391,7 +326,7 @@ async function openSites(urls) {
                         }
 
                         try { otpEl.focus() } catch (e5) {}
-                        setNativeValue(otpEl, ${otp});
+                        setNativeValue(otpEl, ${JSON.stringify(B(String(c.totpSecret)))});
 
                         if (btn) {
                             setTimeout(function() {
@@ -401,174 +336,115 @@ async function openSites(urls) {
                     })();
                 `;
         try {
-          await webContents.executeJavaScript(otpScript, true);
-          log(`Tried OTP for ${site.name}`);
-        } catch (e) {
-          log(`OTP script failed for ${site.name}: ${e}`);
+          await f.executeJavaScript(v, !0), u(`Tried OTP for ${c.name}`);
+        } catch (x) {
+          u(`OTP script failed for ${c.name}: ${x}`);
         }
       }
     });
   });
-  const tabsHtml = path$1.join(process.env.VITE_PUBLIC, "site-tabs.html");
-  await siteWindow.loadFile(tabsHtml, { search: `?urls=${encodeURIComponent(JSON.stringify(urls))}` });
-  const duration = (store.duration || 5) * 60 * 1e3;
-  const timeout = setTimeout(() => {
+  const n = p.join(process.env.VITE_PUBLIC, "site-tabs.html");
+  await o.loadFile(n, { search: `?urls=${encodeURIComponent(JSON.stringify(e))}` });
+  const s = (t.duration || 5) * 60 * 1e3, i = setTimeout(() => {
     try {
-      siteWindow == null ? void 0 : siteWindow.close();
+      o == null || o.close();
     } catch {
     }
-  }, duration);
-  siteWindow.on("closed", () => {
-    siteWindow = null;
-    clearTimeout(timeout);
+  }, s);
+  o.on("closed", () => {
+    o = null, clearTimeout(i);
   });
 }
-let tray = null;
-function initTray(win2) {
-  const pngPath = path.join(process.env.VITE_PUBLIC, "icon.png");
-  const svgPath = path.join(process.env.VITE_PUBLIC, "electron-vite.svg");
-  let icon;
-  if (fs.existsSync(pngPath)) {
-    icon = nativeImage.createFromPath(pngPath);
-  } else {
-    icon = nativeImage.createFromPath(svgPath);
-  }
-  if (icon.isEmpty()) icon = nativeImage.createFromPath(process.execPath);
-  if (icon.isEmpty()) icon = nativeImage.createEmpty().resize({ width: 16, height: 16 });
-  tray = new Tray(icon);
-  const buildMenu = () => Menu.buildFromTemplate([
-    { label: "Show App", click: () => win2.show() },
-    { label: "Run Task Now", click: () => runTask() },
+let b = null;
+function ie(e) {
+  const t = O.join(process.env.VITE_PUBLIC, "icon.png"), r = O.join(process.env.VITE_PUBLIC, "electron-vite.svg");
+  let n;
+  m.existsSync(t) ? n = w.createFromPath(t) : n = w.createFromPath(r), n.isEmpty() && (n = w.createFromPath(process.execPath)), n.isEmpty() && (n = w.createEmpty().resize({ width: 16, height: 16 })), b = new W(n);
+  const s = () => H.buildFromTemplate([
+    { label: "Show App", click: () => e.show() },
+    { label: "Run Task Now", click: () => U() },
     {
-      label: isSchedulerRunning() ? "Disable Scheduler" : "Enable Scheduler",
+      label: M() ? "Disable Scheduler" : "Enable Scheduler",
       click: () => {
-        toggleScheduler();
-        tray == null ? void 0 : tray.setContextMenu(buildMenu());
+        ce(), b == null || b.setContextMenu(s());
       }
     },
     { type: "separator" },
-    { label: "Exit", click: () => app.quit() }
-  ]);
-  const contextMenu = buildMenu();
-  tray.setToolTip("PT Manager");
-  tray.setContextMenu(contextMenu);
-  tray.on("double-click", () => {
-    win2.show();
+    { label: "Exit", click: () => a.quit() }
+  ]), i = s();
+  b.setToolTip("PT Manager"), b.setContextMenu(i), b.on("double-click", () => {
+    e.show();
   });
 }
-const __dirname$1 = path$1.dirname(fileURLToPath(import.meta.url));
-process.env.APP_ROOT = path$1.join(__dirname$1, "..");
-const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
-const MAIN_DIST = path$1.join(process.env.APP_ROOT, "dist-electron");
-const RENDERER_DIST = path$1.join(process.env.APP_ROOT, "dist");
-process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path$1.join(process.env.APP_ROOT, "public") : RENDERER_DIST;
-let win;
-const gotLock = app.requestSingleInstanceLock();
-if (gotLock) {
-  app.on("second-instance", () => {
-    try {
-      session.defaultSession.flushStorageData();
-    } catch {
-    }
-    try {
-      session.fromPartition("persist:pt-tabs").flushStorageData();
-    } catch {
-    }
-    app.quit();
-  });
-}
-function createWindow() {
-  win = new BrowserWindow({
+const C = p.dirname(N(import.meta.url));
+process.env.APP_ROOT = p.join(C, "..");
+const R = process.env.VITE_DEV_SERVER_URL, Se = p.join(process.env.APP_ROOT, "dist-electron"), q = p.join(process.env.APP_ROOT, "dist");
+process.env.VITE_PUBLIC = R ? p.join(process.env.APP_ROOT, "public") : q;
+let l;
+const le = a.requestSingleInstanceLock();
+le && a.on("second-instance", () => {
+  try {
+    D.defaultSession.flushStorageData();
+  } catch {
+  }
+  try {
+    D.fromPartition("persist:pt-tabs").flushStorageData();
+  } catch {
+  }
+  a.quit();
+});
+function F() {
+  l = new I({
     icon: function() {
-      const png = path$1.join(process.env.VITE_PUBLIC, "icon.png");
-      const svg = path$1.join(process.env.VITE_PUBLIC, "electron-vite.svg");
-      let img = fs$1.existsSync(png) ? nativeImage.createFromPath(png) : nativeImage.createFromPath(svg);
-      if (img.isEmpty()) img = nativeImage.createFromPath(process.execPath);
-      return img;
+      const e = p.join(process.env.VITE_PUBLIC, "icon.png"), t = p.join(process.env.VITE_PUBLIC, "electron-vite.svg");
+      let r = J.existsSync(e) ? w.createFromPath(e) : w.createFromPath(t);
+      return r.isEmpty() && (r = w.createFromPath(process.execPath)), r;
     }(),
     webPreferences: {
-      preload: path$1.join(__dirname$1, "preload.mjs")
+      preload: p.join(C, "preload.mjs")
     }
-  });
-  win.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
-  win.webContents.on("did-finish-load", () => {
-    win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
-  });
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-  } else {
-    win.loadFile(path$1.join(RENDERER_DIST, "index.html"));
-  }
-  initTray(win);
-  win.on("close", (event) => {
-    if (!app.isQuiting) {
-      event.preventDefault();
-      win == null ? void 0 : win.hide();
-    }
-    return false;
-  });
+  }), l.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"), l.webContents.on("did-finish-load", () => {
+    l == null || l.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  }), R ? l.loadURL(R) : l.loadFile(p.join(q, "index.html")), ie(l), l.on("close", (e) => (a.isQuiting || (e.preventDefault(), l == null || l.hide()), !1));
 }
-app.on("before-quit", () => {
-  app.isQuiting = true;
+a.on("before-quit", () => {
+  a.isQuiting = !0;
   try {
-    session.defaultSession.flushStorageData();
+    D.defaultSession.flushStorageData();
   } catch {
   }
   try {
-    session.fromPartition("persist:pt-tabs").flushStorageData();
+    D.fromPartition("persist:pt-tabs").flushStorageData();
   } catch {
   }
 });
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") ;
+a.on("window-all-closed", () => {
+  process.platform;
 });
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+a.on("activate", () => {
+  I.getAllWindows().length === 0 && F();
 });
-app.whenReady().then(() => {
-  console.log("App User Data Path:", app.getPath("userData"));
-  initScheduler();
+a.whenReady().then(() => {
+  console.log("App User Data Path:", a.getPath("userData")), te();
   try {
-    const s = getStore();
-    app.setLoginItemSettings({ openAtLogin: !!s.autoLaunch });
+    const e = P();
+    a.setLoginItemSettings({ openAtLogin: !!e.autoLaunch });
   } catch {
   }
-  ipcMain.handle("get-store", () => {
-    return getStore();
-  });
-  ipcMain.handle("save-store", (_event, data) => {
-    const oldStore = getStore();
-    saveStore(data);
-    if (oldStore.cron !== data.cron) {
-      startScheduler(data.cron);
-    }
-    if (oldStore.autoLaunch !== data.autoLaunch) {
+  T.handle("get-store", () => P()), T.handle("save-store", (e, t) => {
+    const r = P();
+    if (G(t), r.cron !== t.cron && _(t.cron), r.autoLaunch !== t.autoLaunch)
       try {
-        app.setLoginItemSettings({ openAtLogin: !!data.autoLaunch });
+        a.setLoginItemSettings({ openAtLogin: !!t.autoLaunch });
       } catch {
       }
-    }
-    return true;
-  });
-  ipcMain.handle("get-logs", () => {
-    return getLogs();
-  });
-  ipcMain.handle("run-task", () => {
-    runTask();
-    return true;
-  });
-  ipcMain.handle("open-external", async (_event, url) => {
-    await openSite(url);
-  });
-  ipcMain.handle("get-totp", (_event, secret) => {
-    return generateTotp(String(secret || ""));
-  });
-  createWindow();
+    return !0;
+  }), T.handle("get-logs", () => Q()), T.handle("run-task", () => (U(), !0)), T.handle("open-external", async (e, t) => {
+    await ae(t);
+  }), T.handle("get-totp", (e, t) => B(String(t || ""))), F();
 });
 export {
-  MAIN_DIST,
-  RENDERER_DIST,
-  VITE_DEV_SERVER_URL
+  Se as MAIN_DIST,
+  q as RENDERER_DIST,
+  R as VITE_DEV_SERVER_URL
 };

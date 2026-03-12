@@ -146,7 +146,7 @@ export async function openSites(urls: string[]) {
     const store = getStore()
     const sites = store.sites || []
     
-    siteWindow.webContents.on('did-attach-webview', (event, webContents) => {
+    siteWindow.webContents.on('did-attach-webview', (_event, webContents) => {
         webContents.setWindowOpenHandler(({ url }) => {
             shell.openExternal(url)
             return { action: 'deny' }
@@ -167,7 +167,6 @@ export async function openSites(urls: string[]) {
             if (allowAutoLogin && site.username && site.password && (url.includes('m-team') || url.includes('kp.m-team'))) {
                 const username = JSON.stringify(String(site.username))
                 const password = JSON.stringify(String(site.password))
-                const otp = site.totpSecret ? JSON.stringify(generateTotp(String(site.totpSecret))) : '""'
                 const loginScript = `
                     (function() {
                         function logx() {
@@ -229,6 +228,7 @@ export async function openSites(urls: string[]) {
             }
 
             if (allowAutoLogin && site.totpSecret && (url.includes('m-team') || url.includes('kp.m-team'))) {
+                const otp = JSON.stringify(generateTotp(String(site.totpSecret)))
                 const otpScript = `
                     (function() {
                         function logx() {
