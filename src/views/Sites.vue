@@ -2,7 +2,7 @@
   <div class="sites-container">
     <div class="header">
       <h2>站点管理</h2>
-      <el-button type="primary" @click="addSite">新增站点</el-button>
+      <el-button type="primary" :icon="Plus" @click="addSite">新增站点</el-button>
     </div>
 
     <!-- Desktop Table View -->
@@ -20,17 +20,35 @@
             <a v-else :href="scope.row.url" target="_blank" class="text-truncate d-block">{{ scope.row.url }}</a>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="自动打开" width="100" align="center">
+          <template #default="scope">
+            <el-switch
+              v-model="scope.row.active"
+              @change="handleSwitchChange"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right" align="center">
           <template #default="scope">
             <div class="action-buttons">
               <template v-if="!scope.row.editing">
-                    <el-button size="small" @click="handleEdit(scope.row)">编辑</el-button>
-                    <el-button size="small" type="danger" @click="handleDelete(scope.$index)">删除</el-button>
-                    <el-button size="small" @click="handleOpen(scope.row)">打开</el-button>
+                <el-tooltip content="编辑" placement="top">
+                  <el-button type="primary" link :icon="Edit" @click="handleEdit(scope.row)" />
+                </el-tooltip>
+                <el-tooltip content="立即打开" placement="top">
+                  <el-button type="success" link :icon="Link" @click="handleOpen(scope.row)" />
+                </el-tooltip>
+                <el-tooltip content="删除" placement="top">
+                  <el-button type="danger" link :icon="Delete" @click="handleDelete(scope.$index)" />
+                </el-tooltip>
               </template>
               <template v-else>
-                    <el-button size="small" type="success" @click="handleSave(scope.row)">保存</el-button>
-                    <el-button size="small" @click="scope.row.editing = false">取消</el-button>
+                <el-tooltip content="保存" placement="top">
+                  <el-button type="success" link :icon="Check" @click="handleSave(scope.row)" />
+                </el-tooltip>
+                <el-tooltip content="取消" placement="top">
+                  <el-button type="info" link :icon="Close" @click="scope.row.editing = false" />
+                </el-tooltip>
               </template>
             </div>
           </template>
@@ -41,12 +59,15 @@
     <!-- Mobile Card View -->
     <div class="card-view">
       <div v-for="(site, index) in sites" :key="site.id" class="site-card">
-            <div class="card-header">
-              <div class="site-name">
-                <el-input v-if="site.editing" v-model="site.name" size="small" />
-                <span v-else>{{ site.name }}</span>
-              </div>
-            </div>
+        <div class="card-header">
+          <div class="site-name">
+            <el-input v-if="site.editing" v-model="site.name" size="small" />
+            <span v-else>{{ site.name }}</span>
+          </div>
+          <div class="site-active">
+            <el-switch v-model="site.active" size="small" @change="handleSwitchChange" />
+          </div>
+        </div>
         <div class="card-body">
           <div class="site-url">
             <el-input v-if="site.editing" v-model="site.url" size="small" />
@@ -54,15 +75,15 @@
           </div>
         </div>
         <div class="card-footer">
-              <template v-if="!site.editing">
-                <el-button size="small" @click="handleEdit(site)">编辑</el-button>
-                <el-button size="small" type="danger" @click="handleDelete(index)">删除</el-button>
-                <el-button size="small" @click="handleOpen(site)">打开</el-button>
-              </template>
-              <template v-else>
-                <el-button size="small" type="success" @click="handleSave(site)">保存</el-button>
-                <el-button size="small" @click="site.editing = false">取消</el-button>
-              </template>
+          <template v-if="!site.editing">
+            <el-button size="small" :icon="Edit" @click="handleEdit(site)">编辑</el-button>
+            <el-button size="small" type="danger" :icon="Delete" @click="handleDelete(index)">删除</el-button>
+            <el-button size="small" :icon="Link" @click="handleOpen(site)">打开</el-button>
+          </template>
+          <template v-else>
+            <el-button size="small" type="success" :icon="Check" @click="handleSave(site)">保存</el-button>
+            <el-button size="small" :icon="Close" @click="site.editing = false">取消</el-button>
+          </template>
         </div>
       </div>
     </div>
@@ -71,11 +92,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { Edit, Delete, Link, Check, Close, Plus } from '@element-plus/icons-vue'
 
 interface Site {
   id: string
   name: string
   url: string
+  active?: boolean
   editing?: boolean
 }
 
@@ -90,10 +113,13 @@ const loadStore = async () => {
   const ipc = (window as any).ipcRenderer
   if (ipc && ipc.invoke) {
     store.value = await ipc.invoke('get-store')
-    sites.value = store.value.sites || []
+    sites.value = (store.value.sites || []).map((s: any) => ({
+      ...s,
+      active: s.active !== false // default true
+    }))
   } else {
     sites.value = [
-      { id: '1', name: 'M-Team', url: 'https://next.m-team.cc/index' },
+      { id: '1', name: 'M-Team', url: 'https://next.m-team.cc/index', active: true },
     ]
   }
 }
@@ -103,11 +129,16 @@ const saveStore = async () => {
   await (window as any).ipcRenderer.invoke('save-store', JSON.parse(JSON.stringify(store.value)))
 }
 
+const handleSwitchChange = async () => {
+  await saveStore()
+}
+
 const addSite = () => {
   sites.value.push({
     id: Date.now().toString(),
     name: '新站点',
     url: 'https://',
+    active: true,
     editing: true
   })
 }
@@ -156,6 +187,7 @@ const handleOpen = (row: Site) => {
 .action-buttons {
   display: flex;
   gap: var(--space-2);
+  justify-content: center;
   flex-wrap: wrap;
 }
 
@@ -193,6 +225,9 @@ const handleOpen = (row: Site) => {
   background: var(--gray-50);
   border-bottom: 1px solid var(--gray-200);
   font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .card-body {

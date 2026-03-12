@@ -48,7 +48,9 @@ export async function startScheduler(cronExpression: string) {
 
 export async function runTask() {
     const store = getStore()
-    const urls = (store.sites as any[]).map(s => s.url).filter(Boolean)
+    const urls = (store.sites as any[])
+        .filter(s => s.active !== false && s.url)
+        .map(s => s.url)
     log(`Running task with ${urls.length} site(s)`)
     try {
         await openSites(urls)
@@ -141,6 +143,8 @@ export async function openSites(urls: string[]) {
     siteWindow.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36')
     const tabsHtml = path.join(process.env.VITE_PUBLIC as string, 'site-tabs.html')
     await siteWindow.loadFile(tabsHtml, { search: `?urls=${encodeURIComponent(JSON.stringify(urls))}` })
-    const timeout = setTimeout(() => { try { siteWindow?.close() } catch {} }, 5 * 60 * 1000)
+    const store = getStore()
+    const duration = (store.duration || 5) * 60 * 1000
+    const timeout = setTimeout(() => { try { siteWindow?.close() } catch {} }, duration)
     siteWindow.on('closed', () => { siteWindow = null; clearTimeout(timeout) })
 }

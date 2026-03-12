@@ -6,17 +6,20 @@ const storePath = path.join(app.getPath('userData'), 'store.json')
 
 const defaultData = {
   cron: "0 9 * * *",
+  duration: 5, // duration in minutes
   autoLaunch: false,
   sites: [
     {
       id: "mteam",
       name: "M-Team",
-      url: "https://kp.m-team.cc"
+      url: "https://kp.m-team.cc",
+      active: true
     },
     {
       id: "chdbits",
       name: "CHD",
-      url: "https://chdbits.co"
+      url: "https://chdbits.co",
+      active: true
     }
   ]
 }

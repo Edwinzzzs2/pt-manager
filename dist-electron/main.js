@@ -8,17 +8,21 @@ import { createRequire } from "node:module";
 const storePath = path.join(app.getPath("userData"), "store.json");
 const defaultData = {
   cron: "0 9 * * *",
+  duration: 5,
+  // duration in minutes
   autoLaunch: false,
   sites: [
     {
       id: "mteam",
       name: "M-Team",
-      url: "https://kp.m-team.cc"
+      url: "https://kp.m-team.cc",
+      active: true
     },
     {
       id: "chdbits",
       name: "CHD",
-      url: "https://chdbits.co"
+      url: "https://chdbits.co",
+      active: true
     }
   ]
 };
@@ -97,7 +101,7 @@ async function startScheduler(cronExpression) {
 }
 async function runTask() {
   const store = getStore();
-  const urls = store.sites.map((s) => s.url).filter(Boolean);
+  const urls = store.sites.filter((s) => s.active !== false && s.url).map((s) => s.url);
   log(`Running task with ${urls.length} site(s)`);
   try {
     await openSites(urls);
@@ -194,12 +198,14 @@ async function openSites(urls) {
   siteWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
   const tabsHtml = path$1.join(process.env.VITE_PUBLIC, "site-tabs.html");
   await siteWindow.loadFile(tabsHtml, { search: `?urls=${encodeURIComponent(JSON.stringify(urls))}` });
+  const store = getStore();
+  const duration = (store.duration || 5) * 60 * 1e3;
   const timeout = setTimeout(() => {
     try {
       siteWindow == null ? void 0 : siteWindow.close();
     } catch {
     }
-  }, 5 * 60 * 1e3);
+  }, duration);
   siteWindow.on("closed", () => {
     siteWindow = null;
     clearTimeout(timeout);
