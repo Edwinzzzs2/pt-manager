@@ -4,7 +4,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { initScheduler, startScheduler, runTask, openSite } from './scheduler'
 import { getStore, saveStore } from './store'
-import { getLogs } from './logger'
+import { getLogs, log } from './logger'
 import { generateTotp } from './totp'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -143,6 +143,33 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-totp', (_event, secret: string) => {
     return generateTotp(String(secret || ''))
+  })
+
+  ipcMain.handle('clear-browser-data', async () => {
+    try {
+      const targets = [
+        session.defaultSession,
+        session.fromPartition('persist:pt-tabs')
+      ]
+      for (const s of targets) {
+        try {
+          await s.clearCache()
+        } catch {}
+        try {
+          await s.clearStorageData({
+            storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'websql']
+          } as any)
+        } catch {}
+        try {
+          await s.cookies.flushStore()
+        } catch {}
+      }
+      log('已清除浏览器缓存与 Cookie（重新登录后生效）')
+      return true
+    } catch (e) {
+      log(`清除缓存失败：${e}`)
+      return false
+    }
   })
 
   createWindow()

@@ -27,13 +27,20 @@
         <el-button type="primary" @click="runNow">立即执行任务</el-button>
         <el-button @click="saveSettings">保存全部设置</el-button>
       </el-form-item>
+
+      <el-divider />
+
+      <el-form-item label="浏览器缓存">
+        <el-button type="danger" plain @click="clearBrowserData">一键清除缓存与 Cookie</el-button>
+        <div class="help-text">清除后需要重新登录站点，建议在无法登录或验证码异常时使用</div>
+      </el-form-item>
     </el-form>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const cron = ref('')
 const duration = ref(5)
@@ -58,6 +65,19 @@ const saveSettings = async () => {
 const runNow = async () => {
     await (window as any).ipcRenderer.invoke('run-task')
     ElMessage.success('任务已开始')
+}
+
+const clearBrowserData = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将清空内置浏览器的 Cookie 与缓存，可能需要重新登录站点。是否继续？',
+      '清除缓存',
+      { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
+    )
+    const ok = await (window as any).ipcRenderer.invoke('clear-browser-data')
+    if (ok) ElMessage.success('已清除缓存与 Cookie')
+    else ElMessage.error('清除失败，请查看日志')
+  } catch {}
 }
 </script>
 
