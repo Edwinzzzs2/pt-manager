@@ -156,6 +156,7 @@ let task = null;
 let enabled = true;
 let siteWindow = null;
 const __dirname$2 = path$1.dirname(fileURLToPath(import.meta.url));
+const mteamBoundWebContents = /* @__PURE__ */ new Set();
 const mteamAttempts = /* @__PURE__ */ new Map();
 const mteamLastLogAt = /* @__PURE__ */ new Map();
 function oncePerSecond(key, wcId) {
@@ -274,6 +275,7 @@ async function openSite(url) {
   }
 }
 async function openSites(urls) {
+  var _a, _b;
   if (siteWindow && !siteWindow.isDestroyed()) {
     try {
       siteWindow.destroy();
@@ -293,10 +295,21 @@ async function openSites(urls) {
     }
   });
   siteWindow.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
+  try {
+    (_b = (_a = siteWindow.webContents).setMaxListeners) == null ? void 0 : _b.call(_a, 0);
+  } catch {
+  }
   const store = getStore();
   const sites = store.sites || [];
   siteWindow.webContents.on("did-attach-webview", (_event, webContents) => {
+    var _a2;
     const wcId = webContents.id;
+    if (mteamBoundWebContents.has(wcId)) return;
+    mteamBoundWebContents.add(wcId);
+    try {
+      (_a2 = webContents.setMaxListeners) == null ? void 0 : _a2.call(webContents, 0);
+    } catch {
+    }
     if (!mteamAttempts.has(wcId)) {
       mteamAttempts.set(wcId, {
         login: 0,
@@ -311,6 +324,7 @@ async function openSites(urls) {
       try {
         mteamAttempts.delete(wcId);
         mteamLastLogAt.delete(wcId);
+        mteamBoundWebContents.delete(wcId);
       } catch {
       }
     });
@@ -398,16 +412,19 @@ async function openSites(urls) {
                                 return 'logged_in';
                             }
 
-                            try { userEl.focus() } catch (e5) {}
-                            setNativeValue(userEl, ${username});
-                            try { passEl.focus() } catch (e6) {}
-                            setNativeValue(passEl, ${password});
-
                             if (btn) {
                                 setTimeout(function() {
                                     try { btn.click() } catch (e7) {}
-                                }, 300);
+                                }, 900);
                             }
+                            setTimeout(function() {
+                                try { userEl.focus() } catch (e5) {}
+                                setNativeValue(userEl, ${username});
+                            }, 200);
+                            setTimeout(function() {
+                                try { passEl.focus() } catch (e6) {}
+                                setNativeValue(passEl, ${password});
+                            }, 500);
                             window.__PTM_LOGIN_SUBMITTED = true;
                             return 'submitted';
                         }
@@ -439,6 +456,28 @@ async function openSites(urls) {
           st.otpStopped = true;
           log("M-Team：验证码已达最大尝试次数(3)，已停止");
           return;
+        }
+        try {
+          const stage = await webContents.executeJavaScript(
+            `(function() {
+                          try {
+                            if (location.pathname === '/index') return 'not_needed'
+                            const body = document.body && document.body.innerText ? document.body.innerText : ''
+                            if (body.indexOf('分享率') >= 0) return 'not_needed'
+                            const tabs = document.querySelector('.ant-tabs-nav-wrap')
+                            if (!tabs) return 'not_stage'
+                            const t = (tabs.innerText || '') + ' ' + body
+                            if (t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0) return 'stage'
+                            return 'not_stage'
+                          } catch (e) { return 'not_stage' }
+                        })()`,
+            true
+          );
+          if (stage !== "stage") {
+            if (stage === "not_needed") st.otpStopped = true;
+            return;
+          }
+        } catch {
         }
         const otp = JSON.stringify(generateTotp(String(site.totpSecret)));
         const otpScript = `
@@ -484,11 +523,16 @@ async function openSites(urls) {
                         if (!otpEl) return 'no_input';
 
                         var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
-                        try { otpEl.focus() } catch (e5) {}
-                        setNativeValue(otpEl, ${otp});
+                        setTimeout(function() {
+                            try { otpEl.focus() } catch (e5) {}
+                            setNativeValue(otpEl, ${otp});
+                        }, 250);
 
                         if (btn) {
-                            setTimeout(function() { try { btn.click() } catch (e6) {} }, 200);
+                            setTimeout(function() { try { btn.click() } catch (e6) {} }, 900);
+                        }
+
+                        if (btn) {
                             return 'submitted';
                         }
 
@@ -513,18 +557,63 @@ async function openSites(urls) {
         }
       }
     };
-    let mteamCheckTimer = null;
+    let mteamPollTimer = null;
+    let mteamDelayTimer = null;
     const scheduleMTeamChecks = () => {
-      if (mteamCheckTimer) return;
-      const delays = [0, 400, 1200, 2500, 4500];
-      for (const d of delays) {
-        setTimeout(() => {
-          void runMTeamAutoFlows();
-        }, d);
-      }
-      mteamCheckTimer = setTimeout(() => {
-        mteamCheckTimer = null;
-      }, 5500);
+      if (mteamPollTimer) return;
+      const startAt = Date.now();
+      const poll = async () => {
+        if (Date.now() - startAt > 15e3) {
+          if (mteamPollTimer) clearInterval(mteamPollTimer);
+          mteamPollTimer = null;
+          return;
+        }
+        try {
+          const url = webContents.getURL();
+          if (!url.includes("m-team") && !url.includes("kp.m-team")) return;
+          const status = await webContents.executeJavaScript(
+            `(function() {
+                          try {
+                            if (location.pathname === '/index') return 'logged_in'
+                            const body = document.body && document.body.innerText ? document.body.innerText : ''
+                            if (body.indexOf('分享率') >= 0) return 'logged_in'
+                            const tabs = document.querySelector('.ant-tabs-nav-wrap')
+                            if (tabs) {
+                              const t = (tabs.innerText || '') + ' ' + body
+                              if (t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0) return 'otp_stage'
+                            }
+                            const btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]')
+                            if (!btn) return false
+                            const rect = btn.getBoundingClientRect()
+                            return (rect.width > 0 && rect.height > 0) ? 'button_ready' : false
+                          } catch (e) { return false }
+                        })()`,
+            true
+          );
+          if (status === "logged_in") {
+            if (mteamPollTimer) clearInterval(mteamPollTimer);
+            mteamPollTimer = null;
+            if (mteamDelayTimer) clearTimeout(mteamDelayTimer);
+            mteamDelayTimer = null;
+            void runMTeamAutoFlows();
+            return;
+          }
+          if (status === "otp_stage" || status === "button_ready") {
+            if (mteamPollTimer) clearInterval(mteamPollTimer);
+            mteamPollTimer = null;
+            if (mteamDelayTimer) clearTimeout(mteamDelayTimer);
+            mteamDelayTimer = setTimeout(() => {
+              mteamDelayTimer = null;
+              void runMTeamAutoFlows();
+            }, 3e3);
+          }
+        } catch {
+        }
+      };
+      mteamPollTimer = setInterval(() => {
+        void poll();
+      }, 300);
+      void poll();
     };
     webContents.setWindowOpenHandler(({ url }) => {
       shell.openExternal(url);
@@ -539,9 +628,37 @@ async function openSites(urls) {
       scheduleMTeamChecks();
     });
     webContents.on("did-navigate", () => {
+      if (mteamPollTimer) {
+        try {
+          clearInterval(mteamPollTimer);
+        } catch {
+        }
+        mteamPollTimer = null;
+      }
+      if (mteamDelayTimer) {
+        try {
+          clearTimeout(mteamDelayTimer);
+        } catch {
+        }
+        mteamDelayTimer = null;
+      }
       scheduleMTeamChecks();
     });
     webContents.on("did-navigate-in-page", () => {
+      if (mteamPollTimer) {
+        try {
+          clearInterval(mteamPollTimer);
+        } catch {
+        }
+        mteamPollTimer = null;
+      }
+      if (mteamDelayTimer) {
+        try {
+          clearTimeout(mteamDelayTimer);
+        } catch {
+        }
+        mteamDelayTimer = null;
+      }
       scheduleMTeamChecks();
     });
   });

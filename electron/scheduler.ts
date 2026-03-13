@@ -11,6 +11,7 @@ let task: any | null = null
 let enabled = true
 let siteWindow: BrowserWindow | null = null
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const mteamBoundWebContents = new Set<number>()
 const mteamAttempts = new Map<number, {
     login: number
     otp: number
@@ -162,12 +163,16 @@ export async function openSites(urls: string[]) {
         }
     })
     siteWindow.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36')
+    try { (siteWindow.webContents as any).setMaxListeners?.(0) } catch {}
     
     const store = getStore()
     const sites = store.sites || []
     
     siteWindow.webContents.on('did-attach-webview', (_event, webContents) => {
         const wcId = webContents.id
+        if (mteamBoundWebContents.has(wcId)) return
+        mteamBoundWebContents.add(wcId)
+        try { (webContents as any).setMaxListeners?.(0) } catch {}
         if (!mteamAttempts.has(wcId)) {
             mteamAttempts.set(wcId, {
                 login: 0,
@@ -178,7 +183,13 @@ export async function openSites(urls: string[]) {
                 otpNoInputNotified: false
             })
         }
-        webContents.once('destroyed', () => { try { mteamAttempts.delete(wcId); mteamLastLogAt.delete(wcId) } catch {} })
+        webContents.once('destroyed', () => {
+            try {
+                mteamAttempts.delete(wcId)
+                mteamLastLogAt.delete(wcId)
+                mteamBoundWebContents.delete(wcId)
+            } catch {}
+        })
 
         const findSiteForUrl = (url: string) => {
             try {
@@ -265,16 +276,19 @@ export async function openSites(urls: string[]) {
                                 return 'logged_in';
                             }
 
-                            try { userEl.focus() } catch (e5) {}
-                            setNativeValue(userEl, ${username});
-                            try { passEl.focus() } catch (e6) {}
-                            setNativeValue(passEl, ${password});
-
                             if (btn) {
                                 setTimeout(function() {
                                     try { btn.click() } catch (e7) {}
-                                }, 300);
+                                }, 900);
                             }
+                            setTimeout(function() {
+                                try { userEl.focus() } catch (e5) {}
+                                setNativeValue(userEl, ${username});
+                            }, 200);
+                            setTimeout(function() {
+                                try { passEl.focus() } catch (e6) {}
+                                setNativeValue(passEl, ${password});
+                            }, 500);
                             window.__PTM_LOGIN_SUBMITTED = true;
                             return 'submitted';
                         }
@@ -308,6 +322,29 @@ export async function openSites(urls: string[]) {
                     log('M-Team：验证码已达最大尝试次数(3)，已停止')
                     return
                 }
+
+                // Only proceed if the current page is actually in OTP stage
+                try {
+                    const stage = await webContents.executeJavaScript(
+                        `(function() {
+                          try {
+                            if (location.pathname === '/index') return 'not_needed'
+                            const body = document.body && document.body.innerText ? document.body.innerText : ''
+                            if (body.indexOf('分享率') >= 0) return 'not_needed'
+                            const tabs = document.querySelector('.ant-tabs-nav-wrap')
+                            if (!tabs) return 'not_stage'
+                            const t = (tabs.innerText || '') + ' ' + body
+                            if (t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0) return 'stage'
+                            return 'not_stage'
+                          } catch (e) { return 'not_stage' }
+                        })()`,
+                        true
+                    )
+                    if (stage !== 'stage') {
+                        if (stage === 'not_needed') st.otpStopped = true
+                        return
+                    }
+                } catch {}
 
                 const otp = JSON.stringify(generateTotp(String(site.totpSecret)))
                 const otpScript = `
@@ -353,11 +390,16 @@ export async function openSites(urls: string[]) {
                         if (!otpEl) return 'no_input';
 
                         var btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
-                        try { otpEl.focus() } catch (e5) {}
-                        setNativeValue(otpEl, ${otp});
+                        setTimeout(function() {
+                            try { otpEl.focus() } catch (e5) {}
+                            setNativeValue(otpEl, ${otp});
+                        }, 250);
 
                         if (btn) {
-                            setTimeout(function() { try { btn.click() } catch (e6) {} }, 200);
+                            setTimeout(function() { try { btn.click() } catch (e6) {} }, 900);
+                        }
+
+                        if (btn) {
                             return 'submitted';
                         }
 
@@ -384,14 +426,67 @@ export async function openSites(urls: string[]) {
             }
         }
 
-        let mteamCheckTimer: NodeJS.Timeout | null = null
+        let mteamPollTimer: NodeJS.Timeout | null = null
+        let mteamDelayTimer: NodeJS.Timeout | null = null
+
         const scheduleMTeamChecks = () => {
-            if (mteamCheckTimer) return
-            const delays = [0, 400, 1200, 2500, 4500]
-            for (const d of delays) {
-                setTimeout(() => { void runMTeamAutoFlows() }, d)
+            if (mteamPollTimer) return
+
+            const startAt = Date.now()
+            const poll = async () => {
+                if (Date.now() - startAt > 15000) {
+                    if (mteamPollTimer) clearInterval(mteamPollTimer)
+                    mteamPollTimer = null
+                    return
+                }
+
+                try {
+                    const url = webContents.getURL()
+                    if (!url.includes('m-team') && !url.includes('kp.m-team')) return
+
+                    const status = await webContents.executeJavaScript(
+                        `(function() {
+                          try {
+                            if (location.pathname === '/index') return 'logged_in'
+                            const body = document.body && document.body.innerText ? document.body.innerText : ''
+                            if (body.indexOf('分享率') >= 0) return 'logged_in'
+                            const tabs = document.querySelector('.ant-tabs-nav-wrap')
+                            if (tabs) {
+                              const t = (tabs.innerText || '') + ' ' + body
+                              if (t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0) return 'otp_stage'
+                            }
+                            const btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]')
+                            if (!btn) return false
+                            const rect = btn.getBoundingClientRect()
+                            return (rect.width > 0 && rect.height > 0) ? 'button_ready' : false
+                          } catch (e) { return false }
+                        })()`,
+                        true
+                    )
+
+                    if (status === 'logged_in') {
+                        if (mteamPollTimer) clearInterval(mteamPollTimer)
+                        mteamPollTimer = null
+                        if (mteamDelayTimer) clearTimeout(mteamDelayTimer)
+                        mteamDelayTimer = null
+                        void runMTeamAutoFlows()
+                        return
+                    }
+
+                    if (status === 'otp_stage' || status === 'button_ready') {
+                        if (mteamPollTimer) clearInterval(mteamPollTimer)
+                        mteamPollTimer = null
+                        if (mteamDelayTimer) clearTimeout(mteamDelayTimer)
+                        mteamDelayTimer = setTimeout(() => {
+                            mteamDelayTimer = null
+                            void runMTeamAutoFlows()
+                        }, 3000)
+                    }
+                } catch {}
             }
-            mteamCheckTimer = setTimeout(() => { mteamCheckTimer = null }, 5500)
+
+            mteamPollTimer = setInterval(() => { void poll() }, 300)
+            void poll()
         }
 
         webContents.setWindowOpenHandler(({ url }) => {
@@ -410,10 +505,14 @@ export async function openSites(urls: string[]) {
         })
 
         webContents.on('did-navigate', () => {
+            if (mteamPollTimer) { try { clearInterval(mteamPollTimer) } catch {}; mteamPollTimer = null }
+            if (mteamDelayTimer) { try { clearTimeout(mteamDelayTimer) } catch {}; mteamDelayTimer = null }
             scheduleMTeamChecks()
         })
 
         webContents.on('did-navigate-in-page', () => {
+            if (mteamPollTimer) { try { clearInterval(mteamPollTimer) } catch {}; mteamPollTimer = null }
+            if (mteamDelayTimer) { try { clearTimeout(mteamDelayTimer) } catch {}; mteamDelayTimer = null }
             scheduleMTeamChecks()
         })
     })
