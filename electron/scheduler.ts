@@ -19,6 +19,7 @@ const mteamAttempts = new Map<number, {
     otpStopped: boolean
     loggedInNotified: boolean
     otpNoInputNotified: boolean
+    lastStage: '' | 'logged_in' | 'otp_stage' | 'login_form' | 'unknown'
 }>()
 const mteamLastLogAt = new Map<number, { login?: number, otp?: number }>()
 
@@ -180,7 +181,8 @@ export async function openSites(urls: string[]) {
                 loginStopped: false,
                 otpStopped: false,
                 loggedInNotified: false,
-                otpNoInputNotified: false
+                otpNoInputNotified: false,
+                lastStage: ''
             })
         }
         webContents.once('destroyed', () => {
@@ -221,7 +223,40 @@ export async function openSites(urls: string[]) {
                 return
             }
 
-            if (allowAutoLogin && !st.loginStopped && site.username && site.password) {
+            let stage: 'logged_in' | 'otp_stage' | 'login_form' | 'unknown' = 'unknown'
+            try {
+                stage = await webContents.executeJavaScript(
+                    `(function() {
+                      try {
+                        if (location.pathname === '/index') return 'logged_in'
+                        const body = document.body && document.body.innerText ? document.body.innerText : ''
+                        if (body.indexOf('分享率') >= 0) return 'logged_in'
+                        const tabs = document.querySelector('.ant-tabs-nav-wrap')
+                        if (tabs) {
+                          const t = (tabs.innerText || '') + ' ' + body
+                          if (t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0) return 'otp_stage'
+                        }
+                        const userEl = document.querySelector('#username') || document.querySelector('input[name="username"]')
+                        const passEl = document.querySelector('#password') || document.querySelector('input[name="password"]')
+                        if (userEl && passEl) return 'login_form'
+                        return 'unknown'
+                      } catch (e) { return 'unknown' }
+                    })()`,
+                    true
+                )
+            } catch {}
+
+            if (st.lastStage !== stage) {
+                st.lastStage = stage
+                if (stage === 'logged_in') log('M-Team：检测到已登录首页')
+                else if (stage === 'otp_stage') log('M-Team：检测到二次验证阶段，准备填写验证码')
+                else if (stage === 'login_form') log('M-Team：检测到未登录，准备自动登录')
+                else if (stage === 'unknown') log('M-Team：页面未识别到登录表单/二次验证，等待页面加载')
+            }
+
+            if (!allowAutoLogin) return
+
+            if (stage === 'login_form' && !st.loginStopped && site.username && site.password) {
                 if (st.login >= 3) {
                     st.loginStopped = true
                     log('M-Team：自动登录已达最大尝试次数(3)，已停止')
@@ -316,35 +351,12 @@ export async function openSites(urls: string[]) {
                 }
             }
 
-            if (allowAutoLogin && !st.otpStopped && site?.totpSecret) {
+            if (stage === 'otp_stage' && !st.otpStopped && site?.totpSecret) {
                 if (st.otp >= 3) {
                     st.otpStopped = true
                     log('M-Team：验证码已达最大尝试次数(3)，已停止')
                     return
                 }
-
-                // Only proceed if the current page is actually in OTP stage
-                try {
-                    const stage = await webContents.executeJavaScript(
-                        `(function() {
-                          try {
-                            if (location.pathname === '/index') return 'not_needed'
-                            const body = document.body && document.body.innerText ? document.body.innerText : ''
-                            if (body.indexOf('分享率') >= 0) return 'not_needed'
-                            const tabs = document.querySelector('.ant-tabs-nav-wrap')
-                            if (!tabs) return 'not_stage'
-                            const t = (tabs.innerText || '') + ' ' + body
-                            if (t.indexOf('雙重認證碼') >= 0 || t.indexOf('邮箱验证码') >= 0 || t.indexOf('郵箱驗證碼') >= 0) return 'stage'
-                            return 'not_stage'
-                          } catch (e) { return 'not_stage' }
-                        })()`,
-                        true
-                    )
-                    if (stage !== 'stage') {
-                        if (stage === 'not_needed') st.otpStopped = true
-                        return
-                    }
-                } catch {}
 
                 const otp = JSON.stringify(generateTotp(String(site.totpSecret)))
                 const otpScript = `
