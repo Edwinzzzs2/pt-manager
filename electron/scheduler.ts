@@ -336,6 +336,8 @@ export async function openSites(urls: string[]) {
                     if (result === 'submitted') {
                         st.login += 1
                         log('M-Team：检测到未登录，已填写账号密码并提交')
+                        setTimeout(() => { void runMTeamAutoFlows() }, 2800)
+                        setTimeout(() => { void runMTeamAutoFlows() }, 7200)
                     } else if (result === 'loading') {
                         if (oncePerSecond('login', wcId)) log('M-Team：登录中(按钮loading)，等待跳转')
                     } else if (result === 'logged_in') {
@@ -424,6 +426,8 @@ export async function openSites(urls: string[]) {
                     if (result === 'submitted') {
                         st.otp += 1
                         log('M-Team：二次验证，已填写验证码并提交')
+                    } else if (result === 'not_stage') {
+                        if (oncePerSecond('otp', wcId)) log('M-Team：未处于二次验证页，等待页面切换')
                     } else if (result === 'not_needed') {
                         st.otpStopped = true
                     } else if (result === 'no_input') {
@@ -431,6 +435,8 @@ export async function openSites(urls: string[]) {
                             st.otpNoInputNotified = true
                             log('M-Team：二次验证页未找到验证码输入框，稍后重试')
                         }
+                    } else if (result === 'no_button') {
+                        if (oncePerSecond('otp', wcId)) log('M-Team：二次验证页未找到提交按钮，等待页面加载')
                     }
                 } catch (e) {
                     log(`M-Team：二次验证码脚本执行失败：${e}`)
