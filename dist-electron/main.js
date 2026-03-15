@@ -753,6 +753,8 @@ if (gotLock) {
 }
 function createWindow() {
   win = new BrowserWindow({
+    title: "PT Manager",
+    autoHideMenuBar: true,
     icon: function() {
       const png = path$1.join(process.env.VITE_PUBLIC, "icon.png");
       const svg = path$1.join(process.env.VITE_PUBLIC, "electron-vite.svg");
@@ -764,6 +766,7 @@ function createWindow() {
       preload: path$1.join(__dirname$1, "preload.mjs")
     }
   });
+  win.removeMenu();
   win.webContents.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36");
   win.webContents.on("did-finish-load", () => {
     win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());

@@ -1,0 +1,17 @@
+.ui-surface {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-fade-slide-enter-active,
+.ui-fade-slide-leave-active {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.ui-fade-slide-enter-from,
+.ui-fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}

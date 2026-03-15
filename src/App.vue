@@ -35,7 +35,9 @@ import { Monitor, Setting, Document } from '@element-plus/icons-vue'
 <style>
 html, body, #app, .app-container, .el-container { height: 100%; margin: 0; }
 
-.el-aside { background-color: #f5f7fa; border-right: 1px solid #e6e6e6; }
+.app-container { background: var(--bg-page); }
+
+.el-aside { background-color: var(--gray-50); border-right: 1px solid var(--border-color); }
 
 .el-menu { border-right: none; background-color: transparent; }
 </style>

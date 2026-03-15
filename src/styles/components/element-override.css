@@ -1,8 +1,26 @@
 /* Light overrides to Element Plus to meet touch standards and theme */
+html {
+  --el-color-primary: var(--primary-600);
+  --el-color-primary-light-3: var(--primary-400);
+  --el-color-primary-light-5: var(--primary-300);
+  --el-color-primary-light-7: var(--primary-200);
+  --el-color-primary-light-8: var(--primary-100);
+  --el-color-primary-light-9: var(--primary-50);
+  --el-border-radius-base: var(--radius-sm);
+  --el-border-color: var(--border-color);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-secondary);
+  --el-bg-color: var(--bg-card);
+  --el-fill-color-blank: var(--bg-card);
+}
+
 .el-button { min-height: 44px; }
-.el-button--primary { background-color: var(--primary-color); border-color: var(--primary-color); }
-.el-button--primary:hover { background-color: var(--primary-hover); border-color: var(--primary-hover); }
-.el-button--primary:active { background-color: var(--primary-active); border-color: var(--primary-active); }
+.el-button.el-button--primary {
+  background: var(--brand-gradient);
+  border: none;
+}
+.el-button.el-button--primary:hover { filter: brightness(0.98); }
+.el-button.el-button--primary:active { filter: brightness(0.95); }
 
 .el-table { background-color: #fff; }
 .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }

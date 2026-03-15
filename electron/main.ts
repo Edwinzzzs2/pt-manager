@@ -45,6 +45,8 @@ if (gotLock) {
 
 function createWindow() {
   win = new BrowserWindow({
+    title: 'PT Manager',
+    autoHideMenuBar: true,
     icon: (function(){
       const png = path.join(process.env.VITE_PUBLIC, 'icon.png')
       const svg = path.join(process.env.VITE_PUBLIC, 'electron-vite.svg')
@@ -56,6 +58,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
     },
   })
+  win.removeMenu()
   win.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36')
 
   // Test active push message to Renderer-process.

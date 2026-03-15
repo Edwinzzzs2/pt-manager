@@ -7,7 +7,7 @@
 
     <!-- Desktop Table View -->
     <div class="table-view">
-      <el-table :data="sites" style="width: 100%">
+      <el-table :data="sites" :max-height="tableMaxHeight" scrollbar-always-on style="width: 100%">
         <el-table-column prop="name" label="名称" min-width="120">
           <template #default="scope">
             <el-input v-if="scope.row.editing" v-model="scope.row.name" />
@@ -76,21 +76,21 @@
             <div class="action-buttons">
               <template v-if="!scope.row.editing">
                 <el-tooltip content="编辑" placement="top">
-                  <el-button type="primary" link :icon="Edit" @click="handleEdit(scope.row)" />
+                  <el-button link :icon="Edit" @click="handleEdit(scope.row)" />
                 </el-tooltip>
                 <el-tooltip content="立即打开" placement="top">
-                  <el-button type="success" link :icon="Link" @click="handleOpen(scope.row)" />
+                  <el-button link :icon="Link" @click="handleOpen(scope.row)" />
                 </el-tooltip>
                 <el-tooltip content="删除" placement="top">
-                  <el-button type="danger" link :icon="Delete" @click="handleDelete(scope.$index)" />
+                  <el-button link :icon="Delete" @click="handleDelete(scope.$index)" />
                 </el-tooltip>
               </template>
               <template v-else>
                 <el-tooltip content="保存" placement="top">
-                  <el-button type="success" link :icon="Check" @click="handleSave(scope.row)" />
+                  <el-button link :icon="Check" @click="handleSave(scope.row)" />
                 </el-tooltip>
                 <el-tooltip content="取消" placement="top">
-                  <el-button type="info" link :icon="Close" @click="scope.row.editing = false" />
+                  <el-button link :icon="Close" @click="scope.row.editing = false" />
                 </el-tooltip>
               </template>
             </div>
@@ -168,17 +168,25 @@ interface Site {
 const sites = ref<Site[]>([])
 const store = ref<any>({})
 const otpState = ref<Record<string, { code: string; remaining: number; step: number; secret: string }>>({})
+const tableMaxHeight = ref(520)
 let otpTimer: number | null = null
 
 onMounted(async () => {
   await loadStore()
   startOtpTimer()
+  updateTableHeight()
+  window.addEventListener('resize', updateTableHeight)
 })
 
 onUnmounted(() => {
   if (otpTimer) window.clearInterval(otpTimer)
   otpTimer = null
+  window.removeEventListener('resize', updateTableHeight)
 })
+
+const updateTableHeight = () => {
+  tableMaxHeight.value = Math.max(360, window.innerHeight - 160)
+}
 
 const loadStore = async () => {
   const ipc = (window as any).ipcRenderer
@@ -282,7 +290,13 @@ const handleOpen = (row: Site) => {
 </script>
 
 <style scoped>
-.sites-container { padding-left: inherit; padding-right: inherit; }
+.sites-container {
+  padding-left: inherit;
+  padding-right: inherit;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .header {
   display: flex;
   justify-content: space-between;
@@ -308,6 +322,18 @@ const handleOpen = (row: Site) => {
   gap: var(--space-2);
   justify-content: center;
   flex-wrap: wrap;
+}
+
+.action-buttons :deep(.el-button.is-link) {
+  color: var(--text-secondary);
+}
+
+.action-buttons :deep(.el-button.is-link:hover) {
+  color: var(--primary-600);
+}
+
+.table-view {
+  min-height: 0;
 }
 
 /* View Toggle Logic */
