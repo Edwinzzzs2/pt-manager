@@ -1,5 +1,7 @@
 {
   "name": "pt-manager",
+  "description": "PT Manager",
+  "author": "PT Manager",
   "private": true,
   "version": "0.0.0",
   "type": "module",

@@ -19,6 +19,7 @@
   },
   "win": {
     "icon": "public/icon.png",
+    "forceCodeSigning": false,
     "target": [
       {
         "target": "nsis",

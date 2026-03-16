@@ -153,6 +153,18 @@ const clearBrowserData = async () => {
   padding: 6px 8px 8px;
 }
 
+.settings-page :deep(.ui-page-header) {
+  margin-bottom: var(--space-2);
+}
+
+.settings-page :deep(.ui-page-header__title) {
+  font-size: 22px;
+}
+
+.settings-page :deep(.ui-page-header__subtitle) {
+  margin-top: 4px;
+}
+
 .cache-actions {
   display: flex;
   align-items: center;
