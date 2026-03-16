@@ -165,6 +165,10 @@ const clearBrowserData = async () => {
   margin-top: 4px;
 }
 
+.settings-page :deep(.el-col) {
+  margin-bottom: var(--space-3);
+}
+
 .cache-actions {
   display: flex;
   align-items: center;
