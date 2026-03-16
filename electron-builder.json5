@@ -18,7 +18,7 @@
     "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
   },
   "win": {
-    "icon": "public/icon.png",
+    "icon": "public/icon.ico",
     "forceCodeSigning": false,
     "target": [
       {
@@ -35,9 +35,9 @@
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false,
-    "installerIcon": "public/icon.png",
-    "uninstallerIcon": "public/icon.png",
-    "installerHeaderIcon": "public/icon.png"
+    "installerIcon": "public/icon.ico",
+    "uninstallerIcon": "public/icon.ico",
+    "installerHeaderIcon": "public/icon.ico"
   },
   "linux": {
     "target": [
