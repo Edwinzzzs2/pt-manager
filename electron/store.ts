@@ -6,6 +6,7 @@ const storePath = path.join(app.getPath('userData'), 'store.json')
 
 const defaultData = {
   cron: "0 9 * * *",
+  cronOffset: "1-60",
   duration: 5, // duration in minutes
   autoLaunch: false,
   sites: [
@@ -39,7 +40,12 @@ export function getStore() {
     return defaultData
   }
   try {
-    return JSON.parse(fs.readFileSync(storePath, 'utf-8'))
+    const data = JSON.parse(fs.readFileSync(storePath, 'utf-8'))
+    // Backward compatibility: old store files may not contain cronOffset.
+    if (data.cronOffset === undefined || data.cronOffset === null) {
+      data.cronOffset = defaultData.cronOffset
+    }
+    return data
   } catch (e) {
     return defaultData
   }

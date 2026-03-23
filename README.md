@@ -61,6 +61,7 @@ npm run pack:win
 `store.json` 字段说明：
 
 - `cron`：Cron 表达式，默认值 `"0 9 * * *"`（每天 09:00）
+- `cronOffset`：Cron 触发后的随机偏移（分钟，最大 360），默认 `1-60`；支持 `1-360` 或 `5`，为空表示不偏移
 - `duration`：定时任务打开站点窗口保持时长（分钟），默认 `5`
 - `autoLaunch`：是否开机自启
 - `sites`：站点列表（包含 `id`、`name`、`url`、`active` 等）

@@ -38,6 +38,18 @@
 
                 <el-form-item>
                   <template #label>
+                    <el-tooltip content="每次触发后随机延迟执行。支持 1-360（随机 1~360 分钟）或 5（固定 5 分钟）。" placement="top">
+                      <span class="label-with-tip">随机偏移</span>
+                    </el-tooltip>
+                  </template>
+                  <div class="inline">
+                    <el-input v-model="cronOffset" placeholder="如 1-360 或 5" />
+                    <span class="unit">分钟</span>
+                  </div>
+                </el-form-item>
+
+                <el-form-item>
+                  <template #label>
                     <el-tooltip content="建议 3-10 分钟，确保站点 Cookie 刷新。" placement="top">
                       <span class="label-with-tip">窗口打开时间</span>
                     </el-tooltip>
@@ -82,8 +94,10 @@ import UiCard from '../components/ui/UiCard.vue'
 import UiCardSkeleton from '../components/ui/UiCardSkeleton.vue'
 
 const cron = ref('')
+const cronOffset = ref('')
 const duration = ref(5)
 const autoLaunch = ref(false)
+const MAX_CRON_OFFSET_MINUTES = 360
 const store = ref<any>({})
 const loading = ref(true)
 const saving = ref(false)
@@ -94,6 +108,7 @@ onMounted(async () => {
   try {
     store.value = await (window as any).ipcRenderer.invoke('get-store')
     cron.value = store.value.cron
+    cronOffset.value = String(store.value.cronOffset || '')
     duration.value = store.value.duration || 5
     autoLaunch.value = !!store.value.autoLaunch
   } finally {
@@ -101,11 +116,29 @@ onMounted(async () => {
   }
 })
 
+const isValidCronOffset = (value: string) => {
+  const raw = String(value || '').trim()
+  if (!raw) return true
+  const singleMatch = raw.match(/^\d+$/)
+  if (singleMatch) return Number(raw) > 0 && Number(raw) <= MAX_CRON_OFFSET_MINUTES
+  const rangeMatch = raw.match(/^(\d+)\s*-\s*(\d+)$/)
+  if (!rangeMatch) return false
+  const min = Number(rangeMatch[1])
+  const max = Number(rangeMatch[2])
+  return min > 0 && max > 0 && min <= max && max <= MAX_CRON_OFFSET_MINUTES
+}
+
 const saveSettings = async () => {
   saving.value = true
   busy.value = true
   try {
+    const normalizedOffset = String(cronOffset.value || '').trim()
+    if (!isValidCronOffset(normalizedOffset)) {
+      ElMessage.error('随机偏移格式错误，请输入如 1-360 或 5（单位：分钟，最大 360）')
+      return
+    }
     store.value.cron = cron.value
+    store.value.cronOffset = normalizedOffset
     store.value.duration = duration.value
     store.value.autoLaunch = autoLaunch.value
     await (window as any).ipcRenderer.invoke('save-store', JSON.parse(JSON.stringify(store.value)))

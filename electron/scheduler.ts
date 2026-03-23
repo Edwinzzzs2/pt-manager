@@ -9,6 +9,8 @@ import { generateTotp } from './totp'
 let cronLib: any = null
 let task: any | null = null
 let enabled = true
+const pendingRunTimers = new Set<NodeJS.Timeout>()
+const MAX_CRON_OFFSET_MINUTES = 360
 let siteWindow: BrowserWindow | null = null
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const mteamBoundWebContents = new Set<number>()
@@ -34,6 +36,37 @@ function oncePerSecond(key: 'login' | 'otp', wcId: number) {
     return true
 }
 
+function clearPendingRunTimers() {
+    for (const timer of pendingRunTimers) {
+        try { clearTimeout(timer) } catch {}
+    }
+    pendingRunTimers.clear()
+}
+
+function parseCronOffset(value: unknown): { min: number, max: number } | null {
+    const raw = String(value ?? '').trim()
+    if (!raw) return null
+
+    const singleMatch = raw.match(/^(\d+)$/)
+    if (singleMatch) {
+        const minutes = Number(singleMatch[1])
+        if (minutes > 0 && minutes <= MAX_CRON_OFFSET_MINUTES) return { min: minutes, max: minutes }
+        return null
+    }
+
+    const rangeMatch = raw.match(/^(\d+)\s*-\s*(\d+)$/)
+    if (!rangeMatch) return null
+
+    const min = Number(rangeMatch[1])
+    const max = Number(rangeMatch[2])
+    if (min <= 0 || max <= 0 || min > max || min > MAX_CRON_OFFSET_MINUTES || max > MAX_CRON_OFFSET_MINUTES) return null
+    return { min, max }
+}
+
+function randomIntInRange(min: number, max: number) {
+    return Math.floor(Math.random() * (max - min + 1)) + min
+}
+
 export function initScheduler() {
     const store = getStore()
     startScheduler(store.cron)
@@ -54,6 +87,7 @@ export async function startScheduler(cronExpression: string) {
     if (task) {
         task.stop()
     }
+    clearPendingRunTimers()
     log(`Starting scheduler with cron: ${cronExpression}`)
     try {
         // if (process.env.NODE_ENV === 'development') {
@@ -62,7 +96,24 @@ export async function startScheduler(cronExpression: string) {
         // }
         await ensureCron()
         task = cronLib.schedule(cronExpression, () => {
-            if (enabled) runTask()
+            if (!enabled) return
+
+            const store = getStore()
+            const range = parseCronOffset((store as any).cronOffset)
+            if (!range) {
+                void runTask()
+                return
+            }
+
+            const offsetMinutes = randomIntInRange(range.min, range.max)
+            const delayMs = offsetMinutes * 60 * 1000
+            log(`Cron triggered, delaying run by ${offsetMinutes} minute(s)`)
+            const timer = setTimeout(() => {
+                pendingRunTimers.delete(timer)
+                if (!enabled) return
+                void runTask()
+            }, delayMs)
+            pendingRunTimers.add(timer)
         })
     } catch (e) {
         log(`Error starting scheduler: ${e}`)
@@ -83,6 +134,7 @@ export async function runTask() {
 }
 
 export function stopScheduler() {
+    clearPendingRunTimers()
     if (task) {
         enabled = false
         try {
