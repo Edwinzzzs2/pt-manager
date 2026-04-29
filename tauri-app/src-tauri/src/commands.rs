@@ -1,8 +1,9 @@
-use crate::cdp::CdpClient;
+use crate::cdp::{CdpClient, CdpProgress};
 use crate::scheduler;
 use crate::store::{self, AppConfig, LogEntry};
 use chrono::{DateTime, Local};
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
 use tauri_plugin_autostart::ManagerExt;
@@ -14,6 +15,7 @@ pub struct AppState {
     pub logs: Arc<Mutex<Vec<LogEntry>>>,
     pub scheduler: Arc<Mutex<scheduler::Scheduler>>,
     pub task_running: Arc<Mutex<bool>>,
+    pub task_cancel_requested: Arc<AtomicBool>,
     pub app_handle: tauri::AppHandle,
 }
 
@@ -24,6 +26,7 @@ pub struct AppStatus {
     pub next_run: Option<DateTime<Local>>,
     pub last_result: Option<LogEntry>,
     pub is_running: bool,
+    pub cancel_requested: bool,
 }
 
 #[tauri::command]
@@ -113,8 +116,14 @@ pub async fn ensure_cdp(state: State<'_, AppState>) -> Result<bool, String> {
         (config.cdp_port, urls)
     };
     let cdp = CdpClient::new(cdp_port);
-    let result = cdp.ensure_available(&initial_urls).await?;
-    state.logs.lock().await.push(LogEntry::info(result.message));
+    let progress = CdpProgress::new(
+        Arc::clone(&state.logs),
+        Arc::clone(&state.task_cancel_requested),
+    );
+    let result = cdp
+        .ensure_available_with_progress(&initial_urls, &progress)
+        .await?;
+    push_log(&state.logs, LogEntry::info(result.message)).await;
     Ok(true)
 }
 
@@ -126,6 +135,7 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String>
     let cdp_connected = active_cdp_port.is_some();
     let next_run = state.scheduler.lock().await.next_run().await;
     let is_running = *state.task_running.lock().await;
+    let cancel_requested = state.task_cancel_requested.load(Ordering::SeqCst);
     let last_result = state.logs.lock().await.iter().last().cloned();
 
     Ok(AppStatus {
@@ -134,6 +144,7 @@ pub async fn get_status(state: State<'_, AppState>) -> Result<AppStatus, String>
         next_run,
         last_result,
         is_running,
+        cancel_requested,
     })
 }
 
@@ -142,9 +153,28 @@ pub async fn run_task(state: State<'_, AppState>) -> Result<(), String> {
     let config = { state.config.lock().await.clone() };
     let logs = Arc::clone(&state.logs);
     let task_running = Arc::clone(&state.task_running);
+    let task_cancel_requested = Arc::clone(&state.task_cancel_requested);
     tauri::async_runtime::spawn(async move {
-        scheduler::run_with_flag(&config, &logs, &task_running, false).await;
+        scheduler::run_with_flag(&config, &logs, &task_running, &task_cancel_requested, false)
+            .await;
     });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_task(state: State<'_, AppState>) -> Result<(), String> {
+    let is_running = *state.task_running.lock().await;
+    if !is_running {
+        push_log(&state.logs, LogEntry::info("当前没有正在执行的保活任务")).await;
+        return Ok(());
+    }
+
+    state.task_cancel_requested.store(true, Ordering::SeqCst);
+    push_log(
+        &state.logs,
+        LogEntry::info("已请求终止保活任务，正在等待当前步骤收尾"),
+    )
+    .await;
     Ok(())
 }
 
@@ -158,6 +188,7 @@ pub async fn get_logs(state: State<'_, AppState>) -> Result<Vec<LogEntry>, Strin
 pub async fn clear_logs(state: State<'_, AppState>) -> Result<(), String> {
     let mut logs = state.logs.lock().await;
     logs.clear();
+    store::clear_log_file();
     Ok(())
 }
 
@@ -166,7 +197,18 @@ async fn restart_scheduler(state: &State<'_, AppState>, config: AppConfig) {
         config,
         Arc::clone(&state.logs),
         Arc::clone(&state.task_running),
+        Arc::clone(&state.task_cancel_requested),
     );
+}
+
+async fn push_log(logs: &Arc<Mutex<Vec<LogEntry>>>, entry: LogEntry) {
+    store::append_log(&entry);
+    let mut guard = logs.lock().await;
+    guard.push(entry);
+    if guard.len() > 500 {
+        let overflow = guard.len() - 500;
+        guard.drain(0..overflow);
+    }
 }
 
 pub fn apply_auto_launch(app_handle: &tauri::AppHandle, enabled: bool) -> Result<(), String> {

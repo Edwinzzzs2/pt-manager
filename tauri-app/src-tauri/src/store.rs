@@ -1,8 +1,11 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Site {
@@ -64,6 +67,56 @@ impl LogEntry {
             level: "SUCCESS".to_string(),
             message: msg.into(),
         }
+    }
+}
+
+fn local_data_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+            let dir = PathBuf::from(root).join("pt-manager");
+            fs::create_dir_all(&dir).ok();
+            return dir;
+        }
+    }
+
+    let dir = std::env::temp_dir().join("pt-manager");
+    fs::create_dir_all(&dir).ok();
+    dir
+}
+
+pub fn log_file_path() -> PathBuf {
+    local_data_dir().join("run.log")
+}
+
+pub fn append_log(entry: &LogEntry) {
+    let path = log_file_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(
+            file,
+            "{} [{}] {}",
+            entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
+            entry.level,
+            entry.message
+        );
+    }
+}
+
+pub fn clear_log_file() {
+    let _ = fs::write(log_file_path(), "");
+}
+
+pub async fn push_log(logs: &Arc<Mutex<Vec<LogEntry>>>, entry: LogEntry) {
+    append_log(&entry);
+    let mut guard = logs.lock().await;
+    guard.push(entry);
+    if guard.len() > 500 {
+        let overflow = guard.len() - 500;
+        guard.drain(0..overflow);
     }
 }
 

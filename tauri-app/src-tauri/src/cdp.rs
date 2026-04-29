@@ -1,3 +1,4 @@
+use crate::store::{self, LogEntry};
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -5,7 +6,10 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 #[derive(Deserialize, Debug)]
 pub struct CdpTab {
@@ -30,6 +34,31 @@ pub struct CdpLaunchResult {
     pub opened_initial_urls: usize,
 }
 
+pub const CDP_CANCELLED: &str = "CDP 操作已终止";
+
+#[derive(Clone)]
+pub struct CdpProgress {
+    logs: Arc<Mutex<Vec<LogEntry>>>,
+    cancel_requested: Arc<AtomicBool>,
+}
+
+impl CdpProgress {
+    pub fn new(logs: Arc<Mutex<Vec<LogEntry>>>, cancel_requested: Arc<AtomicBool>) -> Self {
+        Self {
+            logs,
+            cancel_requested,
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_requested.load(Ordering::SeqCst)
+    }
+
+    async fn info(&self, message: impl Into<String>) {
+        store::push_log(&self.logs, LogEntry::info(message)).await;
+    }
+}
+
 impl CdpClient {
     pub fn new(port: u16) -> Self {
         Self { port }
@@ -37,7 +66,10 @@ impl CdpClient {
 
     /// 返回当前可用的 CDP 端口；自动模式会从 Chrome 写出的 DevToolsActivePort 中读取真实端口。
     pub async fn available_port(&self) -> Option<u16> {
-        if self.is_available().await {
+        if self
+            .is_available_with_timeout(Duration::from_millis(600))
+            .await
+        {
             return Some(self.port);
         }
 
@@ -45,7 +77,10 @@ impl CdpClient {
             let Some(port) = read_devtools_port(&profile_dir) else {
                 continue;
             };
-            if CdpClient::new(port).is_available().await {
+            if CdpClient::new(port)
+                .is_available_with_timeout(Duration::from_millis(600))
+                .await
+            {
                 return Some(port);
             }
         }
@@ -55,30 +90,66 @@ impl CdpClient {
 
     /// 检测 Chrome 是否以调试模式运行。
     pub async fn is_available(&self) -> bool {
-        self.request("GET", "/json/version", Duration::from_secs(3))
+        self.is_available_with_timeout(Duration::from_secs(3)).await
+    }
+
+    async fn is_available_with_timeout(&self, timeout: Duration) -> bool {
+        self.request("GET", "/json/version", timeout)
             .map(|response| (200..300).contains(&response.status))
             .unwrap_or(false)
     }
 
     /// 确保 Chrome 已开放 CDP 端口；自动启动时让 Chrome 选择空闲端口，避免卡死在 9222。
-    pub async fn ensure_available(
+    pub async fn ensure_available_with_progress(
         &self,
         initial_urls: &[String],
+        progress: &CdpProgress,
     ) -> Result<CdpLaunchResult, String> {
+        self.ensure_available_inner(initial_urls, Some(progress))
+            .await
+    }
+
+    async fn ensure_available_inner(
+        &self,
+        initial_urls: &[String],
+        progress: Option<&CdpProgress>,
+    ) -> Result<CdpLaunchResult, String> {
+        log_progress(
+            progress,
+            format!("检测配置端口 localhost:{} 是否已有 CDP 响应", self.port),
+        )
+        .await;
         if self.is_available().await {
-            let opened_initial_urls = self.ensure_initial_urls(initial_urls).await?;
+            check_cancel(progress)?;
+            log_progress(progress, format!("配置端口 localhost:{} 已响应", self.port)).await;
+            let opened_initial_urls = self.ensure_initial_urls(initial_urls, progress).await?;
             return Ok(CdpLaunchResult {
                 port: self.port,
                 message: connected_message("Chrome CDP 已连接", self.port, opened_initial_urls),
                 opened_initial_urls,
             });
         }
+        check_cancel(progress)?;
 
         let profile_dir = dedicated_profile_dir();
+        log_progress(
+            progress,
+            format!("检查专用 Chrome Profile：{}", profile_dir.display()),
+        )
+        .await;
         if let Some(port) = read_devtools_port(&profile_dir) {
+            log_progress(
+                progress,
+                format!("读取到历史 CDP 端口 localhost:{}，正在检测", port),
+            )
+            .await;
             let cdp = CdpClient::new(port);
-            if cdp.is_available().await {
-                let opened_initial_urls = cdp.ensure_initial_urls(initial_urls).await?;
+            if cdp
+                .is_available_with_timeout(Duration::from_millis(800))
+                .await
+            {
+                check_cancel(progress)?;
+                let opened_initial_urls = cdp.ensure_initial_urls(initial_urls, progress).await?;
                 return Ok(CdpLaunchResult {
                     port,
                     message: connected_message(
@@ -89,14 +160,28 @@ impl CdpClient {
                     opened_initial_urls,
                 });
             }
+            log_progress(progress, format!("历史端口 localhost:{} 暂无响应", port)).await;
         }
 
-        if let Some(result) = launch_and_wait(&profile_dir, false, initial_urls).await? {
-            return Ok(result);
+        if profile_dir_in_use(&profile_dir) {
+            log_progress(
+                progress,
+                "专用 Chrome Profile 正在被占用，但没有可用 CDP；跳过复用，改用备用 Profile",
+            )
+            .await;
+        } else {
+            if let Some(result) =
+                launch_and_wait(&profile_dir, false, initial_urls, progress).await?
+            {
+                return Ok(result);
+            }
+
+            check_cancel(progress)?;
+            log_progress(progress, "专用 Chrome 等待超时，准备尝试备用 Profile").await;
         }
 
         let recovery_dir = recovery_profile_dir();
-        if let Some(result) = launch_and_wait(&recovery_dir, true, initial_urls).await? {
+        if let Some(result) = launch_and_wait(&recovery_dir, true, initial_urls, progress).await? {
             return Ok(result);
         }
 
@@ -145,7 +230,11 @@ impl CdpClient {
             .map(|tab| tab.id)
     }
 
-    async fn ensure_initial_urls(&self, initial_urls: &[String]) -> Result<usize, String> {
+    async fn ensure_initial_urls(
+        &self,
+        initial_urls: &[String],
+        progress: Option<&CdpProgress>,
+    ) -> Result<usize, String> {
         let mut opened_count = 0;
 
         for url in initial_urls
@@ -153,11 +242,15 @@ impl CdpClient {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
         {
+            check_cancel(progress)?;
+            log_progress(progress, format!("检查站点标签页：{}", url)).await;
             if self.find_tab_for_url(url).await.is_some() {
+                log_progress(progress, format!("站点已在 Chrome 中打开：{}", url)).await;
                 opened_count += 1;
                 continue;
             }
 
+            log_progress(progress, format!("通过 CDP 新建标签页：{}", url)).await;
             self.open_tab(url)
                 .await
                 .map_err(|err| format!("CDP 已连接，但打开站点 {} 失败：{}", url, err))?;
@@ -273,20 +366,65 @@ async fn launch_and_wait(
     profile_dir: &Path,
     recovery: bool,
     initial_urls: &[String],
+    progress: Option<&CdpProgress>,
 ) -> Result<Option<CdpLaunchResult>, String> {
     let launch_urls = launch_urls(initial_urls);
+    let mode = if recovery {
+        "备用专用 Chrome"
+    } else {
+        "专用 Chrome"
+    };
+    log_progress(
+        progress,
+        format!(
+            "准备启动{}，Profile：{}，初始页面 {} 个",
+            mode,
+            profile_dir.display(),
+            launch_urls.len()
+        ),
+    )
+    .await;
     let _ = fs::remove_file(devtools_port_path(profile_dir));
     launch_chrome(profile_dir, &launch_urls)?;
+    log_progress(progress, format!("{} 进程已启动，等待 CDP 端口文件", mode)).await;
 
-    for _ in 0..30 {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut attempt = 0;
+    while Instant::now() < deadline {
+        attempt += 1;
+        check_cancel(progress)?;
         tokio::time::sleep(Duration::from_millis(500)).await;
         let Some(port) = read_devtools_port(profile_dir) else {
+            if attempt % 4 == 0 {
+                log_progress(
+                    progress,
+                    format!("等待 Chrome 写入 CDP 端口... 已等待 {} 秒", attempt / 2),
+                )
+                .await;
+            }
             continue;
         };
 
+        log_progress(
+            progress,
+            format!("读取到 CDP 端口 localhost:{}，正在检测响应", port),
+        )
+        .await;
         let cdp = CdpClient::new(port);
-        if cdp.is_available().await {
-            let opened_initial_urls = cdp.ensure_initial_urls(initial_urls).await?;
+        if cdp
+            .is_available_with_timeout(Duration::from_millis(800))
+            .await
+        {
+            check_cancel(progress)?;
+            log_progress(progress, format!("CDP localhost:{} 已响应", port)).await;
+            let opened_initial_urls = unique_urls(initial_urls).len();
+            if opened_initial_urls > 0 {
+                log_progress(
+                    progress,
+                    format!("Chrome 启动参数已打开 {} 个初始站点", opened_initial_urls),
+                )
+                .await;
+            }
             let prefix = if recovery {
                 "已启动备用专用调试 Chrome"
             } else {
@@ -299,8 +437,13 @@ async fn launch_and_wait(
                 opened_initial_urls,
             }));
         }
+
+        if attempt % 4 == 0 {
+            log_progress(progress, format!("端口 localhost:{} 尚未响应 CDP", port)).await;
+        }
     }
 
+    log_progress(progress, format!("{} 在 15 秒内未提供可用 CDP", mode)).await;
     Ok(None)
 }
 
@@ -357,6 +500,12 @@ fn read_devtools_port(profile_dir: &Path) -> Option<u16> {
     data.lines().next()?.trim().parse::<u16>().ok()
 }
 
+fn profile_dir_in_use(profile_dir: &Path) -> bool {
+    ["SingletonLock", "SingletonCookie", "SingletonSocket"]
+        .iter()
+        .any(|name| profile_dir.join(name).exists())
+}
+
 fn connected_message(prefix: &str, port: u16, opened_initial_urls: usize) -> String {
     match opened_initial_urls {
         0 => format!("{}：localhost:{}", prefix, port),
@@ -368,6 +517,23 @@ fn connected_message(prefix: &str, port: u16, opened_initial_urls: usize) -> Str
             "{}：localhost:{}，已打开 {} 个站点。首次使用请在该窗口登录站点。",
             prefix, port, count
         ),
+    }
+}
+
+async fn log_progress(progress: Option<&CdpProgress>, message: impl Into<String>) {
+    if let Some(progress) = progress {
+        progress.info(message).await;
+    }
+}
+
+fn check_cancel(progress: Option<&CdpProgress>) -> Result<(), String> {
+    if progress
+        .map(|progress| progress.is_cancelled())
+        .unwrap_or(false)
+    {
+        Err(CDP_CANCELLED.to_string())
+    } else {
+        Ok(())
     }
 }
 

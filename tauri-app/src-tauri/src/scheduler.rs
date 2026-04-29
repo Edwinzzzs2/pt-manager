@@ -1,7 +1,8 @@
-use crate::cdp::CdpClient;
-use crate::store::{AppConfig, LogEntry};
+use crate::cdp::{CdpClient, CdpProgress, CDP_CANCELLED};
+use crate::store::{self, AppConfig, LogEntry};
 use chrono::{DateTime, Datelike, Local, LocalResult, TimeZone};
 use rand::Rng;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::async_runtime::JoinHandle;
@@ -33,6 +34,7 @@ impl Scheduler {
         config: AppConfig,
         logs: Arc<Mutex<Vec<LogEntry>>>,
         task_running: Arc<Mutex<bool>>,
+        task_cancel_requested: Arc<AtomicBool>,
     ) {
         self.stop();
 
@@ -64,7 +66,7 @@ impl Scheduler {
                     .unwrap_or_else(|_| Duration::from_secs(0));
                 tokio::time::sleep(wait).await;
 
-                run_with_flag(&config, &logs, &task_running, true).await;
+                run_with_flag(&config, &logs, &task_running, &task_cancel_requested, true).await;
             }
         });
 
@@ -80,6 +82,7 @@ pub async fn run_with_flag(
     config: &AppConfig,
     logs: &Arc<Mutex<Vec<LogEntry>>>,
     task_running: &Arc<Mutex<bool>>,
+    task_cancel_requested: &Arc<AtomicBool>,
     allow_random_delay: bool,
 ) {
     {
@@ -90,12 +93,18 @@ pub async fn run_with_flag(
             return;
         }
         *running = true;
+        task_cancel_requested.store(false, Ordering::SeqCst);
     }
 
-    run_keepalive_inner(config, logs, allow_random_delay).await;
+    let canceled =
+        run_keepalive_inner(config, logs, task_cancel_requested, allow_random_delay).await;
+    if canceled {
+        push_log(logs, LogEntry::info("保活任务已终止")).await;
+    }
 
     let mut running = task_running.lock().await;
     *running = false;
+    task_cancel_requested.store(false, Ordering::SeqCst);
 }
 
 pub fn next_run_from_cron(expr: &str) -> Option<DateTime<Local>> {
@@ -106,13 +115,14 @@ pub fn next_run_from_cron(expr: &str) -> Option<DateTime<Local>> {
 async fn run_keepalive_inner(
     config: &AppConfig,
     logs: &Arc<Mutex<Vec<LogEntry>>>,
+    task_cancel_requested: &Arc<AtomicBool>,
     allow_random_delay: bool,
-) {
+) -> bool {
     let mut cdp = CdpClient::new(config.cdp_port);
 
     if config.sites.is_empty() {
         push_log(logs, LogEntry::info("暂无站点配置，保活任务结束")).await;
-        return;
+        return false;
     }
 
     // 手动保活会在启动 Chrome 时带上全部站点；定时任务保持顺序访问，避免随机延迟前先打开页面。
@@ -132,17 +142,28 @@ async fn run_keepalive_inner(
             LogEntry::info("Chrome CDP 未连接，正在尝试自动启动 Chrome"),
         )
         .await;
-        match cdp.ensure_available(&initial_urls).await {
+        let cdp_progress = CdpProgress::new(Arc::clone(logs), Arc::clone(task_cancel_requested));
+        match cdp
+            .ensure_available_with_progress(&initial_urls, &cdp_progress)
+            .await
+        {
             Ok(result) => {
                 cdp = CdpClient::new(result.port);
                 launched_with_initial_sites = result.opened_initial_urls > 0;
                 push_log(logs, LogEntry::info(result.message)).await;
             }
             Err(err) => {
+                if err == CDP_CANCELLED || task_cancel_requested.load(Ordering::SeqCst) {
+                    return true;
+                }
                 push_log(logs, LogEntry::error(err)).await;
-                return;
+                return false;
             }
         }
+    }
+
+    if task_cancel_requested.load(Ordering::SeqCst) {
+        return true;
     }
 
     {
@@ -157,16 +178,35 @@ async fn run_keepalive_inner(
             let entry = LogEntry::info(format!("随机延迟 {} 秒", delay_secs));
             push_log(logs, entry).await;
         }
-        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+        if sleep_with_cancel(
+            logs,
+            task_cancel_requested,
+            Duration::from_secs(delay_secs),
+            "随机延迟",
+        )
+        .await
+        {
+            return true;
+        }
     }
 
     // 手动点击“立即保活”时批量打开所有站点，避免用户误以为只执行了第一个站点。
     if !allow_random_delay {
-        run_keepalive_batch(config, logs, &cdp, launched_with_initial_sites).await;
-        return;
+        return run_keepalive_batch(
+            config,
+            logs,
+            &cdp,
+            task_cancel_requested,
+            launched_with_initial_sites,
+        )
+        .await;
     }
 
     for site in config.sites.iter() {
+        if task_cancel_requested.load(Ordering::SeqCst) {
+            return true;
+        }
+
         {
             let entry = LogEntry::info(format!("正在访问: {} ({})", site.name, site.url));
             push_log(logs, entry).await;
@@ -186,7 +226,28 @@ async fn run_keepalive_inner(
                 // 等待页面加载 + 随机抖动
                 let jitter: u64 = rand::thread_rng().gen_range(0..10);
                 let wait = config.visit_duration + jitter;
-                tokio::time::sleep(Duration::from_secs(wait)).await;
+                push_log(
+                    logs,
+                    LogEntry::info(format!("{} 停留 {} 秒，保持登录态", site.name, wait)),
+                )
+                .await;
+                if sleep_with_cancel(
+                    logs,
+                    task_cancel_requested,
+                    Duration::from_secs(wait),
+                    &format!("{} 的停留等待", site.name),
+                )
+                .await
+                {
+                    if let Err(e) = cdp.close_tab(&tab_id).await {
+                        push_log(
+                            logs,
+                            LogEntry::error(format!("终止时关闭标签页失败: {}", e)),
+                        )
+                        .await;
+                    }
+                    return true;
+                }
 
                 // 关闭标签页
                 if let Err(e) = cdp.close_tab(&tab_id).await {
@@ -205,24 +266,45 @@ async fn run_keepalive_inner(
 
         // 站点间隔 5~15 秒
         let interval: u64 = rand::thread_rng().gen_range(5..15);
-        tokio::time::sleep(Duration::from_secs(interval)).await;
+        push_log(
+            logs,
+            LogEntry::info(format!("站点间隔等待 {} 秒", interval)),
+        )
+        .await;
+        if sleep_with_cancel(
+            logs,
+            task_cancel_requested,
+            Duration::from_secs(interval),
+            "站点间隔等待",
+        )
+        .await
+        {
+            return true;
+        }
     }
 
     {
         let entry = LogEntry::success("保活任务全部完成".to_string());
         push_log(logs, entry).await;
     }
+    false
 }
 
 async fn run_keepalive_batch(
     config: &AppConfig,
     logs: &Arc<Mutex<Vec<LogEntry>>>,
     cdp: &CdpClient,
+    task_cancel_requested: &Arc<AtomicBool>,
     launched_with_initial_sites: bool,
-) {
+) -> bool {
     let mut opened_tabs: Vec<(String, String)> = Vec::new();
 
     for site in config.sites.iter() {
+        if task_cancel_requested.load(Ordering::SeqCst) {
+            close_opened_tabs(cdp, logs, opened_tabs).await;
+            return true;
+        }
+
         push_log(
             logs,
             LogEntry::info(format!("正在打开: {} ({})", site.name, site.url)),
@@ -255,10 +337,29 @@ async fn run_keepalive_batch(
 
     if opened_tabs.is_empty() {
         push_log(logs, LogEntry::error("没有成功打开任何站点，保活任务结束")).await;
-        return;
+        return false;
     }
 
-    tokio::time::sleep(Duration::from_secs(config.visit_duration)).await;
+    push_log(
+        logs,
+        LogEntry::info(format!(
+            "已打开 {} 个站点，停留 {} 秒",
+            opened_tabs.len(),
+            config.visit_duration
+        )),
+    )
+    .await;
+    if sleep_with_cancel(
+        logs,
+        task_cancel_requested,
+        Duration::from_secs(config.visit_duration),
+        "批量停留等待",
+    )
+    .await
+    {
+        close_opened_tabs(cdp, logs, opened_tabs).await;
+        return true;
+    }
 
     for (site_name, tab_id) in opened_tabs {
         if let Err(e) = cdp.close_tab(&tab_id).await {
@@ -273,6 +374,50 @@ async fn run_keepalive_batch(
     }
 
     push_log(logs, LogEntry::success("保活任务全部完成".to_string())).await;
+    false
+}
+
+async fn sleep_with_cancel(
+    logs: &Arc<Mutex<Vec<LogEntry>>>,
+    task_cancel_requested: &Arc<AtomicBool>,
+    duration: Duration,
+    stage: &str,
+) -> bool {
+    let mut elapsed = Duration::from_secs(0);
+
+    while elapsed < duration {
+        if task_cancel_requested.load(Ordering::SeqCst) {
+            push_log(
+                logs,
+                LogEntry::info(format!("收到终止请求，正在中断{}", stage)),
+            )
+            .await;
+            return true;
+        }
+
+        let remaining = duration.saturating_sub(elapsed);
+        let step = remaining.min(Duration::from_secs(1));
+        tokio::time::sleep(step).await;
+        elapsed += step;
+    }
+
+    task_cancel_requested.load(Ordering::SeqCst)
+}
+
+async fn close_opened_tabs(
+    cdp: &CdpClient,
+    logs: &Arc<Mutex<Vec<LogEntry>>>,
+    opened_tabs: Vec<(String, String)>,
+) {
+    for (site_name, tab_id) in opened_tabs {
+        if let Err(e) = cdp.close_tab(&tab_id).await {
+            push_log(
+                logs,
+                LogEntry::error(format!("终止时关闭 {} 标签页失败: {}", site_name, e)),
+            )
+            .await;
+        }
+    }
 }
 
 struct CronSpec {
@@ -398,6 +543,7 @@ fn parse_cron_field(field: &str, min: u32, max: u32) -> Option<Vec<u32>> {
 }
 
 async fn push_log(logs: &Arc<Mutex<Vec<LogEntry>>>, entry: LogEntry) {
+    store::append_log(&entry);
     let mut guard = logs.lock().await;
     guard.push(entry);
     if guard.len() > 500 {

@@ -12,6 +12,7 @@ import {
   Save,
   Settings,
   ShieldCheck,
+  Square,
   Trash2,
   XCircle,
   type LucideIcon,
@@ -45,6 +46,7 @@ type AppStatus = {
   next_run: string | null;
   last_result: LogEntry | null;
   is_running: boolean;
+  cancel_requested: boolean;
 };
 
 type TabKey = "dashboard" | "sites" | "settings" | "logs";
@@ -76,6 +78,7 @@ function App() {
   const [editingSite, setEditingSite] = useState({ name: "", url: "" });
   const [busy, setBusy] = useState(false);
   const [cdpBusy, setCdpBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const lastVisibleLog = useMemo(() => logs[logs.length - 1], [logs]);
@@ -104,7 +107,7 @@ function App() {
     const timer = window.setInterval(() => {
       refreshStatus().catch(showError);
       refreshLogs().catch(showError);
-    }, 4000);
+    }, 1000);
 
     return () => window.clearInterval(timer);
   }, []);
@@ -124,6 +127,20 @@ function App() {
       showError(err);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function stopTask() {
+    setCancelBusy(true);
+    setError(null);
+    try {
+      await invoke("stop_task");
+      await refreshStatus();
+      await refreshLogs();
+    } catch (err) {
+      showError(err);
+    } finally {
+      setCancelBusy(false);
     }
   }
 
@@ -282,15 +299,28 @@ function App() {
             <p className="eyebrow">MVP 控制台</p>
             <h1>{pageTitle(activeTab)}</h1>
           </div>
-          <button
-            className="primary-action"
-            disabled={busy || status?.is_running}
-            onClick={runNow}
-            type="button"
-          >
-            {busy || status?.is_running ? <RefreshCw size={18} /> : <Play size={18} />}
-            <span>{busy || status?.is_running ? "执行中" : "立即保活"}</span>
-          </button>
+          <div className="topbar-actions">
+            <button
+              className="primary-action"
+              disabled={busy || status?.is_running}
+              onClick={runNow}
+              type="button"
+            >
+              {busy || status?.is_running ? <RefreshCw size={18} /> : <Play size={18} />}
+              <span>{busy || status?.is_running ? "执行中" : "立即保活"}</span>
+            </button>
+            {status?.is_running ? (
+              <button
+                className="danger-action"
+                disabled={cancelBusy || status.cancel_requested}
+                onClick={stopTask}
+                type="button"
+              >
+                {cancelBusy || status.cancel_requested ? <RefreshCw size={18} /> : <Square size={16} />}
+                <span>{cancelBusy || status.cancel_requested ? "终止中" : "终止"}</span>
+              </button>
+            ) : null}
+          </div>
         </header>
 
         {error ? (
@@ -309,6 +339,7 @@ function App() {
             config={config}
             lastLog={lastVisibleLog}
             onEnsureCdp={ensureCdp}
+            recentLogs={logs.slice(-5).reverse()}
             status={status}
             onRefresh={() => {
               refreshStatus().catch(showError);
@@ -356,6 +387,7 @@ function Dashboard({
   config,
   lastLog,
   onEnsureCdp,
+  recentLogs,
   status,
   onRefresh,
 }: {
@@ -363,6 +395,7 @@ function Dashboard({
   config: AppConfig;
   lastLog?: LogEntry;
   onEnsureCdp: () => void;
+  recentLogs: LogEntry[];
   status: AppStatus | null;
   onRefresh: () => void;
 }) {
@@ -436,6 +469,31 @@ function Dashboard({
           <p className="result-text">
             {status?.last_result?.message ?? lastLog?.message ?? "添加站点并确认 CDP 连接后即可开始。"}
           </p>
+        </div>
+      </section>
+
+      <section className="panel live-log-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Live</p>
+            <h2>实时日志</h2>
+          </div>
+          <button className="icon-button" onClick={onRefresh} title="刷新日志" type="button">
+            <RefreshCw size={17} />
+          </button>
+        </div>
+        <div className="compact-log-list">
+          {recentLogs.length === 0 ? (
+            <div className="empty-state">暂无日志</div>
+          ) : (
+            recentLogs.map((entry, index) => (
+              <div className="compact-log-row" key={`${entry.timestamp}-${index}`}>
+                <span className={levelClass(entry.level)}>{entry.level}</span>
+                <time>{formatTime(entry.timestamp)}</time>
+                <p>{entry.message}</p>
+              </div>
+            ))
+          )}
         </div>
       </section>
     </div>

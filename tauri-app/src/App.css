@@ -23,6 +23,7 @@
 .sidebar-status,
 .nav-item,
 .primary-action,
+.danger-action,
 .site-form,
 .site-row,
 .panel-heading,
@@ -130,6 +131,13 @@ button {
   gap: 16px;
 }
 
+.topbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
 .eyebrow {
   margin-bottom: 3px;
   font-weight: 700;
@@ -154,6 +162,7 @@ h2 {
 }
 
 .primary-action,
+.danger-action,
 .site-form button,
 .row-actions button,
 .settings-save,
@@ -168,10 +177,20 @@ h2 {
 }
 
 .primary-action:hover,
+.danger-action:hover,
 .site-form button:hover,
 .row-actions button:hover,
 .settings-save:hover {
   background: var(--color-accent-hover);
+}
+
+.danger-action {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.danger-action:hover {
+  background: rgba(239, 68, 68, 0.28);
 }
 
 button:disabled {
@@ -305,6 +324,32 @@ button:disabled {
   color: var(--color-fg-muted);
   line-height: 1.7;
   overflow-wrap: anywhere;
+}
+
+.live-log-panel {
+  min-height: 0;
+}
+
+.compact-log-list {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-log-row {
+  display: grid;
+  grid-template-columns: 86px 82px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.compact-log-row p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .site-form {
@@ -514,6 +559,14 @@ label {
   .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .topbar-actions button {
+    flex: 1;
   }
 
   .site-form input:first-child {

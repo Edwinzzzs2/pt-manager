@@ -5,6 +5,7 @@ mod store;
 
 use chrono::{DateTime, Local};
 use commands::AppState;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -25,9 +26,15 @@ pub fn run() {
             let _ = commands::apply_auto_launch(&app.handle(), config.auto_launch);
             let logs = Arc::new(Mutex::new(vec![]));
             let task_running = Arc::new(Mutex::new(false));
+            let task_cancel_requested = Arc::new(AtomicBool::new(false));
             let next_run: Arc<Mutex<Option<DateTime<Local>>>> = Arc::new(Mutex::new(None));
             let mut scheduler = scheduler::Scheduler::new(Arc::clone(&next_run));
-            scheduler.start(config.clone(), Arc::clone(&logs), Arc::clone(&task_running));
+            scheduler.start(
+                config.clone(),
+                Arc::clone(&logs),
+                Arc::clone(&task_running),
+                Arc::clone(&task_cancel_requested),
+            );
 
             // 初始化全局状态
             let state = AppState {
@@ -35,6 +42,7 @@ pub fn run() {
                 logs,
                 scheduler: Arc::new(Mutex::new(scheduler)),
                 task_running,
+                task_cancel_requested,
                 app_handle: app.handle().clone(),
             };
             app.manage(state);
@@ -55,6 +63,7 @@ pub fn run() {
             commands::ensure_cdp,
             commands::get_status,
             commands::run_task,
+            commands::stop_task,
             commands::get_logs,
             commands::clear_logs,
         ])
@@ -84,8 +93,14 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<AppState>();
                     let config = state.config.lock().await.clone();
-                    scheduler::run_with_flag(&config, &state.logs, &state.task_running, false)
-                        .await;
+                    scheduler::run_with_flag(
+                        &config,
+                        &state.logs,
+                        &state.task_running,
+                        &state.task_cancel_requested,
+                        false,
+                    )
+                    .await;
                 });
             }
             "quit" => {
