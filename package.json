@@ -7,6 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "desktop": "npm --prefix tauri-app run tauri -- dev",
+    "tauri:dev": "npm --prefix tauri-app run tauri -- dev",
     "build": "vue-tsc && vite build && electron-builder",
     "preview": "vite preview",
     "pack:win": "vue-tsc && vite build && electron-packager . pt-manager --platform=win32 --arch=x64 --out=out --overwrite"
