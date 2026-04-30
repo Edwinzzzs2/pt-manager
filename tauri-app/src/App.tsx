@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   CheckCircle2,
@@ -104,6 +108,8 @@ function App() {
   const [cdpBusy, setCdpBusy] = useState(false);
   const [cookieSyncBusy, setCookieSyncBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const lastVisibleLog = useMemo(() => logs[logs.length - 1], [logs]);
@@ -128,6 +134,9 @@ function App() {
     refreshConfig().catch(showError);
     refreshStatus().catch(showError);
     refreshLogs().catch(showError);
+    getVersion()
+      .then((version) => setAppVersion(version))
+      .catch(showError);
 
     const timer = window.setInterval(() => {
       refreshStatus().catch(showError);
@@ -322,6 +331,42 @@ function App() {
     }
   }
 
+  async function checkForUpdates() {
+    setUpdateBusy(true);
+    setError(null);
+    try {
+      const update = await check();
+      if (!update) {
+        await message("当前已是最新版本", {
+          kind: "info",
+          title: "检查更新",
+        });
+        return;
+      }
+
+      const shouldInstall = await ask(
+        `发现新版本 ${formatVersion(update.version)}，是否现在下载并安装？`,
+        {
+          kind: "info",
+          okLabel: "立即更新",
+          cancelLabel: "稍后",
+          title: "发现新版本",
+        },
+      );
+      if (!shouldInstall) {
+        return;
+      }
+
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`检查更新失败：${message}`);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -365,9 +410,20 @@ function App() {
                 ? `localhost:${status.active_cdp_port ?? config.cdp_port}`
                 : status?.chrome_installed === false
                   ? "安装后自动接管"
-                  : "运行时自动准备"}
+              : "运行时自动准备"}
             </span>
           </div>
+        </div>
+
+        <div className="version-card">
+          <div>
+            <span>当前版本</span>
+            <strong>{appVersion ? formatVersion(appVersion) : "读取中"}</strong>
+          </div>
+          <button disabled={updateBusy} onClick={checkForUpdates} type="button">
+            <RefreshCw size={14} />
+            <span>{updateBusy ? "检查中" : "检查更新"}</span>
+          </button>
         </div>
       </aside>
 
@@ -1127,6 +1183,10 @@ function formatLogTime(value: string) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function formatVersion(version: string) {
+  return version.startsWith("v") ? version : `v${version}`;
 }
 
 function levelClass(level: LogEntry["level"]) {
