@@ -4,12 +4,14 @@ import {
   Activity,
   CheckCircle2,
   Clock3,
+  Download,
   ListChecks,
   PauseCircle,
   Play,
   Plus,
   RefreshCw,
   Save,
+  Search,
   Settings,
   ShieldCheck,
   Square,
@@ -32,6 +34,15 @@ type AppConfig = {
   visit_duration: number;
   random_delay: boolean;
   auto_launch: boolean;
+  log_retention: number;
+  auto_sync_cookie: boolean;
+  cookiecloud: CookieCloudConfig;
+};
+
+type CookieCloudConfig = {
+  server_url: string;
+  uuid: string;
+  password: string;
 };
 
 type LogEntry = {
@@ -42,11 +53,17 @@ type LogEntry = {
 
 type AppStatus = {
   cdp_connected: boolean;
+  chrome_installed: boolean;
   active_cdp_port: number | null;
   next_run: string | null;
   last_result: LogEntry | null;
   is_running: boolean;
   cancel_requested: boolean;
+};
+
+type CookieCloudSyncResult = {
+  matched_cookies: number;
+  imported_cookies: number;
 };
 
 type TabKey = "dashboard" | "sites" | "settings" | "logs";
@@ -58,6 +75,13 @@ const defaultConfig: AppConfig = {
   visit_duration: 30,
   random_delay: true,
   auto_launch: false,
+  log_retention: 500,
+  auto_sync_cookie: false,
+  cookiecloud: {
+    server_url: "",
+    uuid: "",
+    password: "",
+  },
 };
 
 const navItems: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
@@ -78,6 +102,7 @@ function App() {
   const [editingSite, setEditingSite] = useState({ name: "", url: "" });
   const [busy, setBusy] = useState(false);
   const [cdpBusy, setCdpBusy] = useState(false);
+  const [cookieSyncBusy, setCookieSyncBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -158,6 +183,46 @@ function App() {
     }
   }
 
+  async function openChromeDownload() {
+    setError(null);
+    try {
+      await invoke("open_chrome_download");
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  async function syncCookieCloud() {
+    setCookieSyncBusy(true);
+    setError(null);
+    try {
+      await invoke<CookieCloudSyncResult>("sync_cookiecloud_from_config", {
+        config: settingsDraft,
+      });
+      await refreshStatus();
+      await refreshLogs();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("仅支持 http://")) {
+        try {
+          const cookieData = await fetchCookieCloudData(settingsDraft.cookiecloud);
+          await invoke<CookieCloudSyncResult>("sync_cookiecloud_cookies", {
+            cookies: cookieData,
+          });
+          await refreshStatus();
+          await refreshLogs();
+          return;
+        } catch (fallbackErr) {
+          showError(fallbackErr);
+        }
+      } else {
+        showError(err);
+      }
+    } finally {
+      setCookieSyncBusy(false);
+    }
+  }
+
   async function addSite() {
     const name = newSite.name.trim();
     const url = newSite.url.trim();
@@ -229,6 +294,7 @@ function App() {
       ...settingsDraft,
       cdp_port: Number(settingsDraft.cdp_port) || 9222,
       visit_duration: Math.max(5, Number(settingsDraft.visit_duration) || 30),
+      log_retention: clampNumber(Number(settingsDraft.log_retention) || 500, 50, 5000),
       cron: settingsDraft.cron.trim() || defaultConfig.cron,
     };
 
@@ -285,10 +351,22 @@ function App() {
         </nav>
 
         <div className="sidebar-status">
-          <span className={status?.cdp_connected ? "dot ok" : "dot danger"} />
+          <span className={status?.cdp_connected ? "dot ok" : "dot standby"} />
           <div>
-            <strong>{status?.cdp_connected ? "Chrome 已连接" : "Chrome 未连接"}</strong>
-            <span>localhost:{status?.active_cdp_port ?? config.cdp_port}</span>
+            <strong>
+              {status?.cdp_connected
+                ? "Chrome 已连接"
+                : status?.chrome_installed === false
+                  ? "需要安装 Chrome"
+                  : "自动模式待命"}
+            </strong>
+            <span>
+              {status?.cdp_connected
+                ? `localhost:${status.active_cdp_port ?? config.cdp_port}`
+                : status?.chrome_installed === false
+                  ? "安装后自动接管"
+                  : "运行时自动准备"}
+            </span>
           </div>
         </div>
       </aside>
@@ -339,6 +417,7 @@ function App() {
             config={config}
             lastLog={lastVisibleLog}
             onEnsureCdp={ensureCdp}
+            onOpenChromeDownload={openChromeDownload}
             recentLogs={logs.slice(-5).reverse()}
             status={status}
             onRefresh={() => {
@@ -368,9 +447,12 @@ function App() {
         {activeTab === "settings" ? (
           <SettingsPanel
             busy={busy}
+            cookieSyncBusy={cookieSyncBusy}
             draft={settingsDraft}
             onChange={setSettingsDraft}
             onSave={saveSettings}
+            onSyncCookieCloud={syncCookieCloud}
+            taskRunning={!!status?.is_running}
           />
         ) : null}
 
@@ -382,11 +464,128 @@ function App() {
   );
 }
 
+async function fetchCookieCloudData(config: CookieCloudConfig) {
+  const serverUrl = config.server_url.trim();
+  const uuid = config.uuid.trim();
+  const password = config.password;
+  if (!serverUrl || !uuid || !password) {
+    throw new Error("请先填写 CookieCloud 地址、UUID 和密码");
+  }
+
+  const endpoints = buildCookieCloudEndpoints(serverUrl, uuid);
+  const errors: string[] = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      const payload = await requestCookieCloudPayload(endpoint, password);
+      if (payload?.cookie_data) {
+        return payload.cookie_data;
+      }
+      if (payload?.encrypted) {
+        throw new Error("CookieCloud 服务端返回了密文，请确认服务端支持 password 解密接口");
+      }
+      throw new Error("CookieCloud 返回数据缺少 cookie_data");
+    } catch (err) {
+      errors.push(`${endpoint}: ${readableError(err)}`);
+    }
+  }
+
+  throw new Error(
+    [
+      "CookieCloud 无法连接，请确认服务地址和协议是否与浏览器插件一致。",
+      "常见格式：https://ccc.ft07.com 或 http://127.0.0.1:8088",
+      errors[0] ? `最近一次错误：${errors[0]}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
+async function requestCookieCloudPayload(endpoint: string, password: string) {
+  let response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    response = await fetch(`${endpoint}?password=${encodeURIComponent(password)}`);
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const text = await response.text();
+  return parseCookieCloudPayload(text);
+}
+
+function buildCookieCloudEndpoints(serverUrl: string, uuid: string) {
+  const encodedUuid = encodeURIComponent(uuid);
+  const bases = buildCookieCloudBaseCandidates(serverUrl);
+  return bases.map((base) => {
+    if (/\/get\/[^/]+\/?$/i.test(base)) {
+      return base.replace(/\/+$/, "");
+    }
+    if (/\/get\/?$/i.test(base)) {
+      return `${base.replace(/\/+$/, "")}/${encodedUuid}`;
+    }
+    return `${base.replace(/\/+$/, "")}/get/${encodedUuid}`;
+  });
+}
+
+function buildCookieCloudBaseCandidates(input: string) {
+  const cleaned = input.trim().replace(/\/+$/, "");
+  const candidates: string[] = [];
+
+  // CookieCloud 插件常允许直接填域名；这里按公网优先 https、本机优先保留原协议来补齐。
+  const push = (value: string) => {
+    if (!candidates.includes(value)) {
+      candidates.push(value);
+    }
+  };
+
+  if (!/^https?:\/\//i.test(cleaned)) {
+    push(`https://${cleaned}`);
+    push(`http://${cleaned}`);
+    return candidates;
+  }
+
+  push(cleaned);
+  try {
+    const url = new URL(cleaned);
+    if (url.protocol === "http:" && !isLocalCookieCloudHost(url.hostname)) {
+      url.protocol = "https:";
+      push(url.toString().replace(/\/+$/, ""));
+    }
+  } catch {
+    // URL 已经在 fetch 阶段报错，这里只负责生成候选地址。
+  }
+
+  return candidates;
+}
+
+function isLocalCookieCloudHost(hostname: string) {
+  return ["localhost", "127.0.0.1", "::1"].includes(hostname);
+}
+
+function readableError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("10061") || message.includes("积极拒绝")) {
+    return "目标地址没有 CookieCloud 服务在监听";
+  }
+  return message;
+}
+
+function parseCookieCloudPayload(text: string): Record<string, unknown> | null {
+  const parsed = JSON.parse(text);
+  return typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+}
+
 function Dashboard({
   cdpBusy,
   config,
   lastLog,
   onEnsureCdp,
+  onOpenChromeDownload,
   recentLogs,
   status,
   onRefresh,
@@ -395,18 +594,22 @@ function Dashboard({
   config: AppConfig;
   lastLog?: LogEntry;
   onEnsureCdp: () => void;
+  onOpenChromeDownload: () => void;
   recentLogs: LogEntry[];
   status: AppStatus | null;
   onRefresh: () => void;
 }) {
+  const chromeInstalled = status?.chrome_installed !== false;
+  const chromeConnected = !!status?.cdp_connected;
+
   return (
     <div className="dashboard">
       <section className="metric-grid">
         <MetricCard
-          icon={status?.cdp_connected ? CheckCircle2 : XCircle}
-          label="CDP 状态"
-          tone={status?.cdp_connected ? "ok" : "danger"}
-          value={status?.cdp_connected ? "已连接" : "未连接"}
+          icon={chromeConnected ? CheckCircle2 : chromeInstalled ? PauseCircle : Download}
+          label="Chrome 环境"
+          tone={chromeConnected ? "ok" : chromeInstalled ? "muted" : "warning"}
+          value={chromeConnected ? "已就绪" : chromeInstalled ? "自动模式" : "需安装"}
         />
         <MetricCard icon={ListChecks} label="站点数量" value={`${config.sites.length}`} />
         <MetricCard
@@ -427,32 +630,45 @@ function Dashboard({
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Chrome</p>
-              <h2>调试端口</h2>
+              <h2>自动模式</h2>
             </div>
             <div className="row-actions">
-              <button
-                className="ghost"
-                disabled={cdpBusy}
-                onClick={onEnsureCdp}
-                type="button"
-              >
-                {cdpBusy ? <RefreshCw size={16} /> : <Play size={16} />}
-                <span>{cdpBusy ? "打开中" : "打开全部"}</span>
-              </button>
+              {!chromeInstalled ? (
+                <button
+                  className="ghost install-action"
+                  onClick={onOpenChromeDownload}
+                  type="button"
+                >
+                  <Download size={16} />
+                  <span>安装 Chrome</span>
+                </button>
+              ) : !chromeConnected ? (
+                <button
+                  className="ghost"
+                  disabled={cdpBusy || status?.is_running}
+                  onClick={onEnsureCdp}
+                  type="button"
+                >
+                  {cdpBusy ? <RefreshCw size={16} /> : <Play size={16} />}
+                  <span>{cdpBusy ? "准备中" : "预先准备"}</span>
+                </button>
+              ) : null}
               <button className="icon-button" onClick={onRefresh} title="刷新状态" type="button">
                 <RefreshCw size={17} />
               </button>
             </div>
           </div>
           <code className="command-line">
-            {status?.cdp_connected
-              ? `CDP 已连接：localhost:${status.active_cdp_port ?? config.cdp_port}`
-              : "自动模式会启动专用 Chrome，并打开全部已配置站点"}
+            {chromeConnected
+              ? `CDP 已连接：localhost:${status?.active_cdp_port ?? config.cdp_port}`
+              : chromeInstalled
+                ? "自动模式待命：执行保活时会自动启动专用 Chrome"
+                : "未检测到 Chrome：安装完成后即可自动启动专用浏览器"}
           </code>
           <div className="setup-steps">
-            <span>1. 自动模式使用专用 Chrome Profile，不再固定依赖 9222</span>
-            <span>2. 打开全部会补齐当前站点列表，不只处理第一个站点</span>
-            <span>3. 手动接管时，设置页里的 CDP 端口仍可用于连接已有 Chrome</span>
+            <span>1. 默认自动模式，保活时自动启动专用 Chrome Profile</span>
+            <span>2. 首次打开后登录站点，后续会复用同一个专用浏览器环境</span>
+            <span>3. 未安装 Chrome 时先安装，安装完成后点刷新或立即保活</span>
           </div>
         </div>
 
@@ -467,7 +683,7 @@ function Dashboard({
             </span>
           </div>
           <p className="result-text">
-            {status?.last_result?.message ?? lastLog?.message ?? "添加站点并确认 CDP 连接后即可开始。"}
+            {status?.last_result?.message ?? lastLog?.message ?? "添加站点后即可开始，Chrome 会在运行时自动准备。"}
           </p>
         </div>
       </section>
@@ -487,9 +703,13 @@ function Dashboard({
             <div className="empty-state">暂无日志</div>
           ) : (
             recentLogs.map((entry, index) => (
-              <div className="compact-log-row" key={`${entry.timestamp}-${index}`}>
+              <div
+                className="compact-log-row"
+                key={`${entry.timestamp}-${index}`}
+                title={entry.message}
+              >
                 <span className={levelClass(entry.level)}>{entry.level}</span>
-                <time>{formatTime(entry.timestamp)}</time>
+                <time>{formatLogTime(entry.timestamp)}</time>
                 <p>{entry.message}</p>
               </div>
             ))
@@ -628,65 +848,169 @@ function SitesPanel({
 
 function SettingsPanel({
   busy,
+  cookieSyncBusy,
   draft,
   onChange,
   onSave,
+  onSyncCookieCloud,
+  taskRunning,
 }: {
   busy: boolean;
+  cookieSyncBusy: boolean;
   draft: AppConfig;
   onChange: (config: AppConfig) => void;
   onSave: () => void;
+  onSyncCookieCloud: () => void;
+  taskRunning: boolean;
 }) {
   return (
-    <section className="panel settings-grid">
-      <label>
-        <span>Cron 表达式</span>
-        <input
-          onChange={(event) => onChange({ ...draft, cron: event.target.value })}
-          value={draft.cron}
-        />
-      </label>
-      <label>
-        <span>CDP 端口</span>
-        <input
-          min={1}
-          onChange={(event) => onChange({ ...draft, cdp_port: Number(event.target.value) })}
-          type="number"
-          value={draft.cdp_port}
-        />
-      </label>
-      <label>
-        <span>页面停留秒数</span>
-        <input
-          min={5}
-          onChange={(event) =>
-            onChange({ ...draft, visit_duration: Number(event.target.value) })
-          }
-          type="number"
-          value={draft.visit_duration}
-        />
-      </label>
-      <label className="switch-row">
-        <span>随机延迟</span>
-        <input
-          checked={draft.random_delay}
-          onChange={(event) => onChange({ ...draft, random_delay: event.target.checked })}
-          type="checkbox"
-        />
-      </label>
-      <label className="switch-row">
-        <span>开机自启</span>
-        <input
-          checked={draft.auto_launch}
-          onChange={(event) => onChange({ ...draft, auto_launch: event.target.checked })}
-          type="checkbox"
-        />
-      </label>
-      <button className="primary-action settings-save" disabled={busy} onClick={onSave} type="button">
-        <Save size={18} />
-        <span>保存设置</span>
-      </button>
-    </section>
+    <div className="settings-stack">
+      <section className="panel settings-card">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Keepalive</p>
+            <h2>任务设置</h2>
+          </div>
+        </div>
+
+        <div className="settings-form">
+          <label>
+            <span>Cron 表达式</span>
+            <input
+              onChange={(event) => onChange({ ...draft, cron: event.target.value })}
+              value={draft.cron}
+            />
+          </label>
+          <label>
+            <span>页面停留秒数</span>
+            <input
+              min={5}
+              onChange={(event) =>
+                onChange({ ...draft, visit_duration: Number(event.target.value) })
+              }
+              type="number"
+              value={draft.visit_duration}
+            />
+          </label>
+          <label>
+            <span>日志保留条数</span>
+            <input
+              max={5000}
+              min={50}
+              onChange={(event) =>
+                onChange({ ...draft, log_retention: Number(event.target.value) })
+              }
+              type="number"
+              value={draft.log_retention}
+            />
+          </label>
+          <label className="switch-row">
+            <span>随机延迟</span>
+            <input
+              checked={draft.random_delay}
+              onChange={(event) => onChange({ ...draft, random_delay: event.target.checked })}
+              type="checkbox"
+            />
+          </label>
+          <label className="switch-row">
+            <span>开机自启</span>
+            <input
+              checked={draft.auto_launch}
+              onChange={(event) => onChange({ ...draft, auto_launch: event.target.checked })}
+              type="checkbox"
+            />
+          </label>
+        </div>
+
+        <details className="advanced-settings">
+          <summary>手动端口（可选）</summary>
+          <label>
+            <span>Chrome 调试端口</span>
+            <input
+              min={1}
+              onChange={(event) => onChange({ ...draft, cdp_port: Number(event.target.value) })}
+              type="number"
+              value={draft.cdp_port}
+            />
+          </label>
+        </details>
+
+        <div className="settings-actions">
+          <button className="primary-action settings-save" disabled={busy} onClick={onSave} type="button">
+            <Save size={18} />
+            <span>保存设置</span>
+          </button>
+        </div>
+      </section>
+
+      <section className="panel settings-card cookiecloud-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">CookieCloud</p>
+            <h2>Cookie 同步</h2>
+          </div>
+          <div className="row-actions">
+            <button
+              className="ghost"
+              disabled={cookieSyncBusy || taskRunning}
+              onClick={onSyncCookieCloud}
+              type="button"
+            >
+              <RefreshCw size={16} />
+              <span>{taskRunning ? "任务执行中" : cookieSyncBusy ? "同步中" : "同步 Cookie"}</span>
+            </button>
+          </div>
+        </div>
+        <div className="settings-form cookiecloud-grid">
+          <label>
+            <span>服务地址</span>
+            <input
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  cookiecloud: { ...draft.cookiecloud, server_url: event.target.value },
+                })
+              }
+              placeholder="https://ccc.ft07.com"
+              value={draft.cookiecloud.server_url}
+            />
+          </label>
+          <label>
+            <span>UUID</span>
+            <input
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  cookiecloud: { ...draft.cookiecloud, uuid: event.target.value },
+                })
+              }
+              value={draft.cookiecloud.uuid}
+            />
+          </label>
+          <label>
+            <span>密码</span>
+            <input
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  cookiecloud: { ...draft.cookiecloud, password: event.target.value },
+                })
+              }
+              type="password"
+              value={draft.cookiecloud.password}
+            />
+          </label>
+          <label className="switch-row">
+            <span>保活前自动同步</span>
+            <input
+              checked={draft.auto_sync_cookie}
+              onChange={(event) => onChange({ ...draft, auto_sync_cookie: event.target.checked })}
+              type="checkbox"
+            />
+          </label>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -699,6 +1023,20 @@ function LogsPanel({
   onClear: () => void;
   onRefresh: () => void;
 }) {
+  const [searchText, setSearchText] = useState("");
+  const filteredLogs = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    if (!query) {
+      return logs;
+    }
+
+    return logs.filter((entry) =>
+      `${formatLogTime(entry.timestamp)} ${entry.level} ${entry.message}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [logs, searchText]);
+
   return (
     <section className="panel logs-panel">
       <div className="panel-heading">
@@ -707,6 +1045,14 @@ function LogsPanel({
           <h2>运行日志</h2>
         </div>
         <div className="row-actions">
+          <label className="log-search">
+            <Search size={15} />
+            <input
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="搜索日志"
+              value={searchText}
+            />
+          </label>
           <button className="ghost" onClick={onRefresh} type="button">
             <RefreshCw size={16} />
             <span>刷新</span>
@@ -719,14 +1065,20 @@ function LogsPanel({
       <div className="log-list">
         {logs.length === 0 ? (
           <div className="empty-state">暂无日志</div>
+        ) : filteredLogs.length === 0 ? (
+          <div className="empty-state">没有匹配的日志</div>
         ) : (
-          logs
+          filteredLogs
             .slice()
             .reverse()
             .map((entry, index) => (
-              <div className="log-row" key={`${entry.timestamp}-${index}`}>
+              <div
+                className="log-row"
+                key={`${entry.timestamp}-${index}`}
+                title={entry.message}
+              >
                 <span className={levelClass(entry.level)}>{entry.level}</span>
-                <time>{formatTime(entry.timestamp)}</time>
+                <time>{formatLogTime(entry.timestamp)}</time>
                 <p>{entry.message}</p>
               </div>
             ))
@@ -761,6 +1113,20 @@ function formatTime(value: string) {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(value));
+}
+
+function formatLogTime(value: string) {
+  const date = new Date(value);
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function levelClass(level: LogEntry["level"]) {

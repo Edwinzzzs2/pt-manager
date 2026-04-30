@@ -1,5 +1,6 @@
 mod cdp;
 mod commands;
+mod cookiecloud;
 mod scheduler;
 mod store;
 
@@ -23,8 +24,9 @@ pub fn run() {
         .setup(|app| {
             // 加载配置
             let config = store::load_config(&app.handle());
+            store::set_log_retention(config.log_retention);
             let _ = commands::apply_auto_launch(&app.handle(), config.auto_launch);
-            let logs = Arc::new(Mutex::new(vec![]));
+            let logs = Arc::new(Mutex::new(store::load_logs()));
             let task_running = Arc::new(Mutex::new(false));
             let task_cancel_requested = Arc::new(AtomicBool::new(false));
             let next_run: Arc<Mutex<Option<DateTime<Local>>>> = Arc::new(Mutex::new(None));
@@ -61,11 +63,14 @@ pub fn run() {
             commands::update_site,
             commands::check_cdp,
             commands::ensure_cdp,
+            commands::sync_cookiecloud_cookies,
+            commands::sync_cookiecloud_from_config,
             commands::get_status,
             commands::run_task,
             commands::stop_task,
             commands::get_logs,
             commands::clear_logs,
+            commands::open_chrome_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

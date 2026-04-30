@@ -1,4 +1,5 @@
 use crate::cdp::{CdpClient, CdpProgress, CDP_CANCELLED};
+use crate::cookiecloud;
 use crate::store::{self, AppConfig, LogEntry};
 use chrono::{DateTime, Datelike, Local, LocalResult, TimeZone};
 use rand::Rng;
@@ -125,6 +126,31 @@ async fn run_keepalive_inner(
         return false;
     }
 
+    if config.auto_sync_cookie {
+        match sync_cookiecloud_before_keepalive(config, logs, task_cancel_requested).await {
+            Ok((matched, imported)) => {
+                push_log(
+                    logs,
+                    LogEntry::success(format!(
+                        "保活前 CookieCloud 自动同步完成：匹配 {} 个，写入 {} 个",
+                        matched, imported
+                    )),
+                )
+                .await;
+            }
+            Err(err) => {
+                if err == CDP_CANCELLED || task_cancel_requested.load(Ordering::SeqCst) {
+                    return true;
+                }
+                push_log(
+                    logs,
+                    LogEntry::error(format!("保活前 CookieCloud 自动同步失败：{}，继续执行保活", err)),
+                )
+                .await;
+            }
+        }
+    }
+
     // 手动保活会在启动 Chrome 时带上全部站点；定时任务保持顺序访问，避免随机延迟前先打开页面。
     let initial_urls = if allow_random_delay {
         Vec::new()
@@ -136,7 +162,16 @@ async fn run_keepalive_inner(
             .collect::<Vec<_>>()
     };
     let mut launched_with_initial_sites = false;
-    if !cdp.is_available().await {
+    if let Some(active_port) = cdp.available_port().await {
+        if active_port != config.cdp_port {
+            push_log(
+                logs,
+                LogEntry::info(format!("已复用自动 CDP 端口 localhost:{}", active_port)),
+            )
+            .await;
+            cdp = CdpClient::new(active_port);
+        }
+    } else {
         push_log(
             logs,
             LogEntry::info("Chrome CDP 未连接，正在尝试自动启动 Chrome"),
@@ -288,6 +323,36 @@ async fn run_keepalive_inner(
         push_log(logs, entry).await;
     }
     false
+}
+
+async fn sync_cookiecloud_before_keepalive(
+    config: &AppConfig,
+    logs: &Arc<Mutex<Vec<LogEntry>>>,
+    task_cancel_requested: &Arc<AtomicBool>,
+) -> Result<(usize, usize), String> {
+    push_log(logs, LogEntry::info("保活前自动同步 CookieCloud")).await;
+
+    let cookiecloud_config = config.cookiecloud.clone();
+    let cookie_data = tauri::async_runtime::spawn_blocking(move || {
+        cookiecloud::fetch_cookie_data(&cookiecloud_config)
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+    let cookie_params = cookiecloud::cookies_for_sites(cookie_data, &config.sites)?;
+    if cookie_params.is_empty() {
+        return Err("CookieCloud 未匹配到当前站点的 Cookie".to_string());
+    }
+
+    let cdp = CdpClient::new(config.cdp_port);
+    let active_port = match cdp.available_port().await {
+        Some(port) => port,
+        None => {
+            let progress = CdpProgress::new(Arc::clone(logs), Arc::clone(task_cancel_requested));
+            cdp.ensure_available_with_progress(&[], &progress).await?.port
+        }
+    };
+    let imported = CdpClient::new(active_port).set_cookies(&cookie_params).await?;
+    Ok((cookie_params.len(), imported))
 }
 
 async fn run_keepalive_batch(
@@ -543,11 +608,5 @@ fn parse_cron_field(field: &str, min: u32, max: u32) -> Option<Vec<u32>> {
 }
 
 async fn push_log(logs: &Arc<Mutex<Vec<LogEntry>>>, entry: LogEntry) {
-    store::append_log(&entry);
-    let mut guard = logs.lock().await;
-    guard.push(entry);
-    if guard.len() > 500 {
-        let overflow = guard.len() - 500;
-        guard.drain(0..overflow);
-    }
+    store::push_log(logs, entry).await;
 }
