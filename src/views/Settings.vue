@@ -79,6 +79,14 @@
                 <el-button class="btn-block" :loading="saving" @click="saveSettings">保存全部设置</el-button>
               </div>
             </UiCard>
+
+            <UiCard title="数据备份" class="backup-card" compact hover>
+              <div class="backup-actions">
+                <el-button class="btn-block" :icon="Download" :loading="exporting" :disabled="busy" @click="exportData">导出备份</el-button>
+                <el-button class="btn-block" :icon="Upload" :loading="importing" :disabled="busy" @click="importData">导入备份</el-button>
+              </div>
+              <div class="backup-note">备份包含站点、账号、密码与 2FA 密钥，请妥善保管导出的 JSON 文件。</div>
+            </UiCard>
           </el-col>
         </el-row>
       </div>
@@ -89,6 +97,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Download, Upload } from '@element-plus/icons-vue'
 import UiPageHeader from '../components/ui/UiPageHeader.vue'
 import UiCard from '../components/ui/UiCard.vue'
 import UiCardSkeleton from '../components/ui/UiCardSkeleton.vue'
@@ -102,19 +111,29 @@ const store = ref<any>({})
 const loading = ref(true)
 const saving = ref(false)
 const running = ref(false)
+const exporting = ref(false)
+const importing = ref(false)
 const busy = ref(false)
 
 onMounted(async () => {
   try {
-    store.value = await (window as any).ipcRenderer.invoke('get-store')
-    cron.value = store.value.cron
-    cronOffset.value = String(store.value.cronOffset || '')
-    duration.value = store.value.duration || 5
-    autoLaunch.value = !!store.value.autoLaunch
+    await loadStore()
   } finally {
     loading.value = false
   }
 })
+
+const applyStoreToForm = (data: any) => {
+  store.value = data || {}
+  cron.value = store.value.cron || ''
+  cronOffset.value = String(store.value.cronOffset || '')
+  duration.value = store.value.duration || 5
+  autoLaunch.value = !!store.value.autoLaunch
+}
+
+const loadStore = async () => {
+  applyStoreToForm(await (window as any).ipcRenderer.invoke('get-store'))
+}
 
 const isValidCronOffset = (value: string) => {
   const raw = String(value || '').trim()
@@ -157,6 +176,46 @@ const runNow = async () => {
     ElMessage.success('任务已开始')
   } finally {
     running.value = false
+    busy.value = false
+  }
+}
+
+const exportData = async () => {
+  exporting.value = true
+  busy.value = true
+  try {
+    const result = await (window as any).ipcRenderer.invoke('export-store')
+    if (!result?.canceled) {
+      ElMessage.success(`已导出 ${result.siteCount || 0} 个站点`)
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导出失败')
+  } finally {
+    exporting.value = false
+    busy.value = false
+  }
+}
+
+const importData = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '导入会覆盖当前站点与设置。建议先导出一份当前备份，是否继续？',
+      '导入备份',
+      { type: 'warning', confirmButtonText: '继续导入', cancelButtonText: '取消' }
+    )
+    importing.value = true
+    busy.value = true
+    const result = await (window as any).ipcRenderer.invoke('import-store')
+    if (!result?.canceled) {
+      applyStoreToForm(result.data)
+      ElMessage.success(`已导入 ${result.siteCount || 0} 个站点`)
+    }
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error(e?.message || '导入失败')
+    }
+  } finally {
+    importing.value = false
     busy.value = false
   }
 }
@@ -263,6 +322,23 @@ const clearBrowserData = async () => {
   gap: var(--space-2);
 }
 
+.backup-actions {
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-2);
+}
+
+.backup-card {
+  margin-top: var(--space-3);
+}
+
+.backup-note {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
 .btn-block {
   flex: 1 1 0;
   width: auto;
@@ -277,7 +353,8 @@ const clearBrowserData = async () => {
     text-align: left;
   }
 
-  .quick-actions {
+  .quick-actions,
+  .backup-actions {
     flex-direction: column;
   }
 }

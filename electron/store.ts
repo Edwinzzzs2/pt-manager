@@ -4,7 +4,7 @@ import fs from 'fs'
 
 const storePath = path.join(app.getPath('userData'), 'store.json')
 
-const defaultData = {
+export const defaultData = {
   cron: "0 9 * * *",
   cronOffset: "1-60",
   duration: 5, // duration in minutes
@@ -29,6 +29,22 @@ const defaultData = {
   ]
 }
 
+export type StoreData = typeof defaultData & Record<string, any>
+
+export function normalizeStore(data: any): StoreData {
+  const source = data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+  const duration = Number(source.duration)
+
+  return {
+    ...source,
+    cron: typeof source.cron === 'string' && source.cron.trim() ? source.cron : defaultData.cron,
+    cronOffset: source.cronOffset === undefined || source.cronOffset === null ? defaultData.cronOffset : String(source.cronOffset),
+    duration: Number.isFinite(duration) && duration > 0 ? duration : defaultData.duration,
+    autoLaunch: !!source.autoLaunch,
+    sites: Array.isArray(source.sites) ? source.sites : []
+  }
+}
+
 export function getStore() {
   if (!fs.existsSync(storePath)) {
     // Ensure directory exists
@@ -40,17 +56,16 @@ export function getStore() {
     return defaultData
   }
   try {
-    const data = JSON.parse(fs.readFileSync(storePath, 'utf-8'))
-    // Backward compatibility: old store files may not contain cronOffset.
-    if (data.cronOffset === undefined || data.cronOffset === null) {
-      data.cronOffset = defaultData.cronOffset
-    }
-    return data
+    return normalizeStore(JSON.parse(fs.readFileSync(storePath, 'utf-8')))
   } catch (e) {
     return defaultData
   }
 }
 
 export function saveStore(data: any) {
-  fs.writeFileSync(storePath, JSON.stringify(data, null, 2))
+  const dir = path.dirname(storePath)
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
+  fs.writeFileSync(storePath, JSON.stringify(normalizeStore(data), null, 2))
 }
