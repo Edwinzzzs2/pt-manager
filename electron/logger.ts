@@ -4,12 +4,16 @@ import fs from 'fs'
 
 const logPath = path.join(app.getPath('userData'), 'app.log')
 
-export function log(message: string) {
+const hasNonAscii = (value: string) => /[^\x00-\x7F]/.test(value)
+
+export function log(message: string, consoleMessage = message) {
     const time = new Date().toLocaleString()
     const line = `[${time}] ${message}\n`
     try {
         fs.appendFileSync(logPath, line)
-        console.log(line.trim())
+        if (!hasNonAscii(consoleMessage)) {
+            console.log(`[${time}] ${consoleMessage}`)
+        }
     } catch (e) {
         console.error("Failed to write log", e)
     }

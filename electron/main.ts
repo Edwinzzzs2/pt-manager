@@ -199,7 +199,7 @@ app.whenReady().then(() => {
       data: store
     }
     fs.writeFileSync(result.filePath, JSON.stringify(backup, null, 2), 'utf-8')
-    log(`已导出数据备份：${result.filePath}`)
+    log(`已导出数据备份：${result.filePath}`, `Exported data backup: ${result.filePath}`)
     return {
       canceled: false,
       filePath: result.filePath,
@@ -227,7 +227,7 @@ app.whenReady().then(() => {
     const nextStore = readBackupPayload(filePath)
     saveStore(nextStore)
     applyStoreSideEffects(oldStore, nextStore)
-    log(`已导入数据备份：${filePath}`)
+    log(`已导入数据备份：${filePath}`, `Imported data backup: ${filePath}`)
     return {
       canceled: false,
       filePath,
@@ -272,10 +272,10 @@ app.whenReady().then(() => {
           await s.cookies.flushStore()
         } catch {}
       }
-      log('已清除浏览器缓存与 Cookie（重新登录后生效）')
+      log('已清除浏览器缓存与 Cookie（重新登录后生效）', 'Cleared browser cache and cookies')
       return true
     } catch (e) {
-      log(`清除缓存失败：${e}`)
+      log(`清除缓存失败：${e}`, `Failed to clear browser cache: ${e}`)
       return false
     }
   })
